@@ -6,7 +6,9 @@
       "Bash(powershell:*)",
       "Bash(ls:*)",
       "Bash(npm run build-installer:*)",
-      "Bash(npx electron-builder:*)"
+      "Bash(npx electron-builder:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }
