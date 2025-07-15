@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Тест полей</title>
+</head>
+<body>
+    <h1>Тест полей ввода</h1>
+    
+    <div style="margin: 20px;">
+        <h2>Простые поля</h2>
+        <input type="text" id="test1" placeholder="Тест 1" style="margin: 5px; padding: 5px;">
+        <input type="text" id="test2" placeholder="Тест 2" style="margin: 5px; padding: 5px;">
+        <input type="text" id="test3" placeholder="Тест 3" style="margin: 5px; padding: 5px;">
+    </div>
+    
+    <div style="margin: 20px;">
+        <h2>Стилизованные поля</h2>
+        <input type="text" id="styled1" placeholder="Стиль 1" style="background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 5px; margin: 5px;">
+        <input type="text" id="styled2" placeholder="Стиль 2" style="background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 5px; margin: 5px;">
+    </div>
+    
+    <button onclick="testAll()">Тест всех полей</button>
+    
+    <script>
+        function testAll() {
+            console.log('=== FIELD TEST ===');
+            
+            const fields = ['test1', 'test2', 'test3', 'styled1', 'styled2'];
+            
+            fields.forEach(id => {
+                const field = document.getElementById(id);
+                console.log(`${id}:`, {
+                    exists: !!field,
+                    disabled: field?.disabled,
+                    readonly: field?.readOnly,
+                    value: field?.value
+                });
+            });
+        }
+    </script>
+</body>
+</html>

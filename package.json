@@ -1,0 +1,165 @@
+{
+  "name": "sp500-widget",
+  "productName": "S&P 500 Widget",
+  "version": "1.0.0",
+  "description": "Beautiful S&P 500 market data widget with portfolio tracking for your desktop",
+  "main": "main.js",
+  "author": {
+    "name": "S&P 500 Widget Team",
+    "email": "support@sp500widget.com"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac",
+    "build-linux": "electron-builder --linux",
+    "dist": "npm run build",
+    "pack": "electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps",
+    "build-installer": "electron-builder --win --publish=never",
+    "build-portable": "electron-builder --win --config.win.target=portable --publish=never"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "electron": "^37.2.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.yourname.sp500widget",
+    "productName": "S&P 500 Widget",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "package.json",
+      "icons/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icons/sp500_cool_transparent_ico256.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "publisherName": "S&P 500 Widget Team",
+      "verifyUpdateCodeSignature": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "icons/sp500_cool_transparent_256x256.png",
+      "category": "public.app-category.finance"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icons/sp500_cool_transparent_256x256.png",
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "S&P 500 Widget",
+      "runAfterFinish": true,
+      "displayLanguageSelector": true,
+      "installerLanguages": [
+        "en",
+        "ru"
+      ],
+      "include": "installer.nsh",
+      "artifactName": "SP500-Widget-Setup-${version}-${arch}.${ext}",
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "icons/sp500_cool_transparent_ico256.ico",
+      "uninstallerIcon": "icons/sp500_cool_transparent_ico256.ico"
+    },
+    "portable": {
+      "artifactName": "SP500-Widget-Portable-${version}.${ext}"
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "icons/sp500_cool_transparent_256x256.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  },
+  "keywords": [
+    "s&p500",
+    "stock market",
+    "widget",
+    "portfolio",
+    "finance",
+    "desktop",
+    "electron",
+    "trading"
+  ],
+  "homepage": "https://github.com/cmeept/sp500-widget",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cmeept/sp500-widget.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cmeept/sp500-widget/issues"
+  }
+}
