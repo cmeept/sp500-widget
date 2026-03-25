@@ -40,10 +40,15 @@ html, body {
   transition: all 0.3s ease;
 }
 
-.widget-container:not(.expanded) {
+.widget-container:not(.expanded):not(.detail-open) {
   height: 160px !important;
   min-height: 160px !important;
   max-height: 160px !important;
+}
+
+.widget-container.detail-open {
+  height: auto;
+  overflow: visible;
 }
 
 .widget-container.expanded {

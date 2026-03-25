@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resizeForStocks: (stockCount) => ipcRenderer.send('resize-for-stocks', stockCount),
   expandWindowWithHeight: (stockCount) => ipcRenderer.send('expand-window-with-height', stockCount),
 
+  // Resize growing upward (bottom stays, top moves up)
+  resizeUpward: (newHeight) => ipcRenderer.send('resize-upward', newHeight),
+  restoreCollapsed: () => ipcRenderer.send('restore-collapsed'),
+
   // Form visibility
   showAddForm: () => ipcRenderer.send('show-add-form'),
   hideAddForm: () => ipcRenderer.send('hide-add-form'),

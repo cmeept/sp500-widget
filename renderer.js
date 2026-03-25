@@ -708,13 +708,25 @@ function hideTrendDetail() {
   el.trendWeek.classList.remove('active');
   el.trendMonth.classList.remove('active');
   el.trendYear.classList.remove('active');
-  resizeWindowToContent();
+  document.querySelector('.widget-container').classList.remove('detail-open');
+  api.restoreCollapsed();
+}
+
+function resizeForDetail() {
+  // Wait for DOM to render, then measure and resize upward
+  setTimeout(() => {
+    const container = document.querySelector('.widget-container');
+    const h = Math.max(container.scrollHeight, container.offsetHeight) + 4;
+    api.resizeUpward(h);
+  }, 50);
 }
 
 async function showTrendDetailData(period) {
+  const container = document.querySelector('.widget-container');
+  container.classList.add('detail-open');
   el.trendDetail.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:10px;padding:4px;">Loading...</div>';
   el.trendDetail.classList.add('visible');
-  resizeWindowToContent();
+  resizeForDetail();
 
   try {
     if (currentTrendMode === 'sp500') {
@@ -731,7 +743,7 @@ async function showTrendDetailData(period) {
   } catch {
     el.trendDetail.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:10px;padding:4px;">No data</div>';
   }
-  resizeWindowToContent();
+  resizeForDetail();
 }
 
 function renderTrendDetail(period, timestamps, prices, livePrice) {

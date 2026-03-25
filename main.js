@@ -193,6 +193,30 @@ ipcMain.on('resize-to-content', (_event, height) => {
   resizeWindow((!isExpanded && height !== COLLAPSED_HEIGHT) ? COLLAPSED_HEIGHT : height);
 });
 
+// Resize upward: bottom edge stays fixed, window grows up
+ipcMain.on('resize-upward', (_event, newHeight) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [currentX, currentY] = mainWindow.getPosition();
+  const [, currentHeight] = mainWindow.getSize();
+  const deltaH = newHeight - currentHeight;
+  const newY = Math.max(0, currentY - deltaH);
+  mainWindow.setBounds({ x: currentX, y: newY, width: WIDGET_WIDTH, height: newHeight });
+});
+
+// Restore to collapsed height, move back down
+ipcMain.on('restore-collapsed', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const pos = store.get('collapsedPosition');
+  if (pos) {
+    mainWindow.setBounds({ x: pos.x, y: pos.y, width: WIDGET_WIDTH, height: COLLAPSED_HEIGHT });
+  } else {
+    const [currentX, currentY] = mainWindow.getPosition();
+    const [, currentHeight] = mainWindow.getSize();
+    const newY = currentY + (currentHeight - COLLAPSED_HEIGHT);
+    mainWindow.setBounds({ x: currentX, y: newY, width: WIDGET_WIDTH, height: COLLAPSED_HEIGHT });
+  }
+});
+
 ipcMain.on('resize-for-stocks', (_event, stockCount) => resizeForStockCount(stockCount));
 
 ipcMain.on('expand-window-with-height', (_event, stockCount) => {
