@@ -797,36 +797,47 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
 
   } else if (period === 'month') {
     // Weekly breakdown for current month
+    // Each week: Monday close → next Monday close (matching WEEK trend logic)
     const monthStart = getMonthStartDate();
     const monthStartTs = monthStart.getTime() / 1000;
 
-    let refIdx = 0;
+    // Collect all Mondays in this month from the data
+    const mondays = [];
     for (let i = 0; i < timestamps.length; i++) {
-      if (timestamps[i] >= monthStartTs) { refIdx = Math.max(0, i - 1); break; }
-    }
-
-    let weekNum = 1;
-    let weekFirstPrice = prices[refIdx];
-    let weekLastPrice = prices[refIdx];
-
-    for (let i = refIdx + 1; i < timestamps.length; i++) {
       if (timestamps[i] < monthStartTs) continue;
       const price = prices[i];
       if (!price || price <= 0) continue;
       const date = new Date(timestamps[i] * 1000);
-
-      if (date.getDay() === 1 && weekLastPrice !== weekFirstPrice) {
-        const change = weekFirstPrice > 0 ? ((weekLastPrice - weekFirstPrice) / weekFirstPrice) * 100 : 0;
-        rows.push({ label: `Week ${weekNum}`, change, current: false });
-        weekNum++;
-        weekFirstPrice = weekLastPrice;
+      if (date.getDay() === 1) {
+        mondays.push({ ts: timestamps[i], price, idx: i });
       }
-      weekLastPrice = price;
     }
 
-    const finalPrice = livePrice || weekLastPrice;
-    const change = weekFirstPrice > 0 ? ((finalPrice - weekFirstPrice) / weekFirstPrice) * 100 : 0;
-    rows.push({ label: `Week ${weekNum}`, change, current: true });
+    // Reference price = close before month started
+    const refPrice = findPriceAtDate(timestamps, prices, monthStart);
+
+    if (mondays.length === 0) {
+      // No Mondays yet this month — just one partial week
+      const change = refPrice > 0 ? ((livePrice - refPrice) / refPrice) * 100 : 0;
+      rows.push({ label: 'Week 1', change, current: true });
+    } else {
+      // Week 1: month start → first Monday
+      const w1change = refPrice > 0 ? ((mondays[0].price - refPrice) / refPrice) * 100 : 0;
+      rows.push({ label: 'Week 1', change: w1change, current: false });
+
+      // Middle weeks: Monday → next Monday
+      for (let w = 1; w < mondays.length; w++) {
+        const startP = mondays[w - 1].price;
+        const endP = mondays[w].price;
+        const change = startP > 0 ? ((endP - startP) / startP) * 100 : 0;
+        rows.push({ label: `Week ${w + 1}`, change, current: false });
+      }
+
+      // Current week: last Monday → live price
+      const lastMondayPrice = mondays[mondays.length - 1].price;
+      const curChange = lastMondayPrice > 0 ? ((livePrice - lastMondayPrice) / lastMondayPrice) * 100 : 0;
+      rows.push({ label: `Week ${mondays.length + 1}`, change: curChange, current: true });
+    }
 
   } else if (period === 'year') {
     // Monthly breakdown for current year
