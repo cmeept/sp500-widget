@@ -44,7 +44,7 @@ let formEls = {};
 let portfolio = { stocks: [], lastUpdated: null };
 let isExpanded = false;
 let currentTrendMode = 'sp500';
-let activeTrendDetail = null; // 'week' | 'month' | 'year' | null
+let activeTrendDetail = null; // 'week' | 'month' | 'year' | 'multiyear' | null
 let detailCollapsedY = null; // saved Y position before detail opened
 let lastSuccessfulUpdate = 0;
 
@@ -681,13 +681,21 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 async function toggleTrendDetail(period) {
-  // Toggle off if same period clicked again
-  if (activeTrendDetail === period) {
+  // YEAR: 1st click → months, 2nd click → multi-year, 3rd click → close
+  if (period === 'year' && activeTrendDetail === 'year') {
+    // Switch to multi-year view
+    activeTrendDetail = 'multiyear';
+    showTrendDetailData('multiyear');
+    return;
+  }
+
+  // Close if same period clicked again (or multiyear clicked on year)
+  if (activeTrendDetail === period || (period === 'year' && activeTrendDetail === 'multiyear')) {
     hideTrendDetail();
     return;
   }
 
-  // Save collapsed Y on first open (not when switching between week/month/year)
+  // Save collapsed Y on first open
   if (detailCollapsedY == null) {
     const pos = await api.getWindowPosition();
     detailCollapsedY = pos.y;
@@ -735,7 +743,10 @@ async function showTrendDetailData(period) {
   resizeForDetail();
 
   try {
-    if (currentTrendMode === 'sp500') {
+    if (period === 'multiyear') {
+      // Multi-year view always shows S&P 500 (15 years)
+      await renderMultiYearDetail();
+    } else if (currentTrendMode === 'sp500') {
       const [history, liveData] = await Promise.all([
         api.getChartHistory('^GSPC'),
         api.getSP500Price()
@@ -743,7 +754,6 @@ async function showTrendDetailData(period) {
       if (!history || !liveData?.price) return;
       renderTrendDetail(period, history.timestamps, history.prices, liveData.price);
     } else {
-      // Portfolio mode — use weighted average across stocks
       await renderPortfolioTrendDetail(period);
     }
   } catch {
@@ -903,6 +913,83 @@ async function renderPortfolioTrendDetail(period) {
     // Note: this shows S&P detail when in portfolio mode. For full portfolio
     // breakdown per period, we'd need much more complex weighted calculation.
   }
+}
+
+// ============================================================
+// Multi-year detail (15 years of S&P 500 annual returns)
+// ============================================================
+
+async function renderMultiYearDetail() {
+  const [longHistory, liveData] = await Promise.all([
+    api.getLongHistory('^GSPC'),
+    api.getSP500Price()
+  ]);
+
+  if (!longHistory?.timestamps || !longHistory?.prices) {
+    el.trendDetail.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:10px;padding:4px;">No data</div>';
+    return;
+  }
+
+  const { timestamps, prices } = longHistory;
+  const livePrice = liveData?.price;
+  const rows = [];
+  const thisYear = new Date().getFullYear();
+
+  // Group monthly data by year, calc annual return
+  // Find all unique years in the data
+  const yearPrices = {}; // { year: { first: price, last: price } }
+
+  for (let i = 0; i < timestamps.length; i++) {
+    const price = prices[i];
+    if (!price || price <= 0) continue;
+    const year = new Date(timestamps[i] * 1000).getFullYear();
+
+    if (!yearPrices[year]) {
+      yearPrices[year] = { first: price, last: price };
+    } else {
+      yearPrices[year].last = price;
+    }
+  }
+
+  // Get sorted years (most recent first)
+  const years = Object.keys(yearPrices).map(Number).sort((a, b) => b - a);
+
+  // For each year, calc return: (last / prev_year_last - 1) * 100
+  for (const year of years) {
+    const prevYear = yearPrices[year - 1];
+    const curYear = yearPrices[year];
+
+    if (!prevYear) continue; // need previous year as reference
+
+    const startPrice = prevYear.last;
+    const endPrice = (year === thisYear && livePrice) ? livePrice : curYear.last;
+
+    if (startPrice > 0) {
+      const change = ((endPrice - startPrice) / startPrice) * 100;
+      rows.push({
+        label: `${year}`,
+        change,
+        current: year === thisYear
+      });
+    }
+  }
+
+  // Render
+  if (rows.length === 0) {
+    el.trendDetail.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:10px;padding:4px;">No data</div>';
+    return;
+  }
+
+  el.trendDetail.innerHTML = rows.map(r => {
+    const cls = r.change >= 0 ? 'positive' : 'negative';
+    const sign = r.change >= 0 ? '+' : '';
+    const arrow = r.change >= 0 ? '\u2197' : '\u2198';
+    const rowClass = r.current ? 'trend-detail-row current' : 'trend-detail-row';
+    return `<div class="${rowClass}">
+      <span class="trend-detail-label">${r.label}</span>
+      <span class="trend-detail-value ${cls}">${arrow} ${sign}${r.change.toFixed(2)}%</span>
+    </div>`;
+  }).join('');
 }
 
 // ============================================================

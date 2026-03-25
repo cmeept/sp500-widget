@@ -325,6 +325,30 @@ ipcMain.handle('get-chart-history', async (_event, symbol) => {
   }
 });
 
+// Get 15-year monthly history for multi-year view (cache 30 min)
+ipcMain.handle('get-long-history', async (_event, symbol) => {
+  const cacheKey = `long-history-${symbol}`;
+  const cached = getCached(cacheKey, 1_800_000); // 30 min
+  if (cached) return cached;
+
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=15y&interval=1mo`;
+    const data = await fetchWithRetry(url);
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
+
+    const payload = {
+      timestamps: result.timestamp,
+      prices: result.indicators.adjclose[0].adjclose,
+      fetchedAt: Date.now()
+    };
+    setCache(cacheKey, payload);
+    return payload;
+  } catch {
+    return getCached(cacheKey, 3_600_000) || null; // stale cache up to 1 hour
+  }
+});
+
 // Get live prices for multiple symbols in parallel (cache 10s each)
 ipcMain.handle('get-live-prices', async (_event, symbols) => {
   const results = await Promise.allSettled(
