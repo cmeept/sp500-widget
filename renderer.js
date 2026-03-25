@@ -168,7 +168,7 @@ function resizeWindowToContent() {
   const container = document.querySelector('.widget-container');
   if (!container) return;
   setTimeout(() => {
-    const height = isExpanded ? Math.max(container.scrollHeight, container.offsetHeight) : 160;
+    const height = isExpanded ? Math.max(container.scrollHeight, container.offsetHeight) : 195;
     api.resizeToContent(height);
   }, 350);
 }

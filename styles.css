@@ -18,7 +18,7 @@ html, body {
   overflow: hidden;
   -webkit-app-region: drag;
   user-select: none;
-  min-height: 160px;
+  min-height: 195px;
 }
 
 /* ===== Widget container ===== */
@@ -33,7 +33,7 @@ html, body {
   border-radius: 20px;
   padding: 14px;
   width: 290px;
-  height: 160px;
+  height: 195px;
   position: relative;
   overflow: hidden;
   box-sizing: border-box;
@@ -41,9 +41,9 @@ html, body {
 }
 
 .widget-container:not(.expanded):not(.detail-open) {
-  height: 160px !important;
-  min-height: 160px !important;
-  max-height: 160px !important;
+  height: 195px !important;
+  min-height: 195px !important;
+  max-height: 195px !important;
 }
 
 .widget-container.detail-open {
