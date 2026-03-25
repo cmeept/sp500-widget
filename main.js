@@ -301,6 +301,43 @@ ipcMain.handle('get-sp500-price', async () => {
   }
 });
 
+// Get intraday / weekly sparkline data (cache 60s)
+ipcMain.handle('get-sparkline-data', async (_event, mode) => {
+  // mode: '1D' = today 1-min candles, '1W' = 5 days 5-min candles
+  const cacheKey = `sparkline-${mode}`;
+  const cached = getCached(cacheKey, 60_000);
+  if (cached) return cached;
+
+  try {
+    const params = mode === '1W'
+      ? 'range=5d&interval=5m'
+      : 'range=1d&interval=2m';
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?${params}`;
+    const data = await fetchWithRetry(url);
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
+
+    const timestamps = result.timestamp || [];
+    const quotes = result.indicators?.quote?.[0];
+    const closes = quotes?.close || [];
+    const previousClose = result.meta?.previousClose || result.meta?.chartPreviousClose;
+
+    // Filter out null values
+    const points = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      if (closes[i] != null && closes[i] > 0) {
+        points.push({ t: timestamps[i], p: closes[i] });
+      }
+    }
+
+    const payload = { points, previousClose, fetchedAt: Date.now() };
+    setCache(cacheKey, payload);
+    return payload;
+  } catch {
+    return getCached(cacheKey, 300_000) || null;
+  }
+});
+
 // Get 1-year historical data for a symbol (cache 5 min)
 ipcMain.handle('get-chart-history', async (_event, symbol) => {
   const cacheKey = `history-${symbol}`;

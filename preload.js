@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Market data — all fetched through main process (cached + retry)
   getSP500Price: () => ipcRenderer.invoke('get-sp500-price'),
+  getSparklineData: (mode) => ipcRenderer.invoke('get-sparkline-data', mode),
   getChartHistory: (symbol) => ipcRenderer.invoke('get-chart-history', symbol),
   getLongHistory: (symbol) => ipcRenderer.invoke('get-long-history', symbol),
   getLivePrices: (symbols) => ipcRenderer.invoke('get-live-prices', symbols),

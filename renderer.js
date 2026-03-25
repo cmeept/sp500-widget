@@ -31,6 +31,8 @@ const el = {
   weekChange: document.getElementById('weekChange'),
   monthChange: document.getElementById('monthChange'),
   yearChange: document.getElementById('yearChange'),
+  sparklineCanvas: document.getElementById('sparklineCanvas'),
+  sparklineToggle: document.getElementById('sparklineToggle'),
   trendWeek: document.getElementById('trendWeek'),
   trendMonth: document.getElementById('trendMonth'),
   trendYear: document.getElementById('trendYear'),
@@ -44,6 +46,7 @@ let formEls = {};
 let portfolio = { stocks: [], lastUpdated: null };
 let isExpanded = false;
 let currentTrendMode = 'sp500';
+let sparklineMode = '1D'; // '1D' or '1W'
 let activeTrendDetail = null; // 'week' | 'month' | 'year' | 'multiyear' | null
 let detailCollapsedY = null; // saved Y position before detail opened
 let lastSuccessfulUpdate = 0;
@@ -90,6 +93,13 @@ el.reduceStockSymbol.addEventListener('change', (e) => {
     const stock = portfolio.stocks.find(s => s.symbol === sym);
     if (stock) { el.currentShares.value = stock.shares; el.sellShares.max = stock.shares; el.sellShares.focus(); }
   } else { el.currentShares.value = ''; el.sellShares.max = ''; }
+});
+
+el.sparklineToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  sparklineMode = sparklineMode === '1D' ? '1W' : '1D';
+  el.sparklineToggle.textContent = sparklineMode;
+  updateSparkline();
 });
 
 el.sp500Data.addEventListener('click', (e) => { e.stopPropagation(); if (!isExpanded) showTrendIndicators('sp500'); });
@@ -916,6 +926,90 @@ async function renderPortfolioTrendDetail(period) {
 }
 
 // ============================================================
+// Sparkline chart
+// ============================================================
+
+async function updateSparkline() {
+  try {
+    const data = await api.getSparklineData(sparklineMode);
+    if (!data?.points || data.points.length < 2) return;
+    drawSparkline(data.points, data.previousClose);
+  } catch { /* silent */ }
+}
+
+function drawSparkline(points, previousClose) {
+  const canvas = el.sparklineCanvas;
+  const ctx = canvas.getContext('2d');
+
+  // High-DPI support
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width;
+  const h = rect.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const prices = points.map(p => p.p);
+  const minP = Math.min(...prices);
+  const maxP = Math.max(...prices);
+  const range = maxP - minP || 1;
+  const padding = 2;
+
+  // Determine color: green if last > previousClose, red if below
+  const lastPrice = prices[prices.length - 1];
+  const isPositive = lastPrice >= (previousClose || prices[0]);
+  const lineColor = isPositive ? '#4ade80' : '#f87171';
+  const fillColor = isPositive ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)';
+
+  // Draw previous close reference line (dashed)
+  if (previousClose && previousClose >= minP && previousClose <= maxP) {
+    const refY = h - padding - ((previousClose - minP) / range) * (h - padding * 2);
+    ctx.beginPath();
+    ctx.setLineDash([2, 3]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 0.5;
+    ctx.moveTo(0, refY);
+    ctx.lineTo(w, refY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Build path
+  const stepX = w / (prices.length - 1);
+  ctx.beginPath();
+  for (let i = 0; i < prices.length; i++) {
+    const x = i * stepX;
+    const y = h - padding - ((prices[i] - minP) / range) * (h - padding * 2);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+
+  // Stroke the line
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 1.2;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Fill area under the line
+  const lastX = (prices.length - 1) * stepX;
+  ctx.lineTo(lastX, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+
+  // Draw current price dot
+  const lastY = h - padding - ((lastPrice - minP) / range) * (h - padding * 2);
+  ctx.beginPath();
+  ctx.arc(lastX, lastY, 2, 0, Math.PI * 2);
+  ctx.fillStyle = lineColor;
+  ctx.fill();
+}
+
+// ============================================================
 // Multi-year detail (15 years of S&P 500 annual returns)
 // ============================================================
 
@@ -997,9 +1091,10 @@ async function renderMultiYearDetail() {
 // ============================================================
 
 function startAutoUpdate() {
-  // Price updates every 15s
+  // Price + sparkline updates every 15s
   setInterval(async () => {
     await updateSP500Price();
+    updateSparkline();
 
     if (portfolio.stocks.length > 0) {
       try {
@@ -1033,7 +1128,7 @@ async function initialize() {
     el.trendIndicators.style.display = 'grid';
   }
   updateMarketOverviewLayout();
-  setTimeout(() => { updateSP500Price(); startAutoUpdate(); }, 500);
+  setTimeout(() => { updateSP500Price(); updateSparkline(); startAutoUpdate(); }, 500);
 }
 
 // Show content immediately with placeholders
