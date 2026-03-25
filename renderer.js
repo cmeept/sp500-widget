@@ -499,6 +499,11 @@ function findPriceAtDate(timestamps, prices, targetDate) {
   return prices[lo] || 0;
 }
 
+// All periods reset at 15:00 local time:
+// - Week:  Monday 15:00
+// - Month: 1st of month 15:00
+// - Year:  January 1st 15:00
+
 function getWeekStartDate() {
   const today = new Date();
   const day = today.getDay();
@@ -509,6 +514,26 @@ function getWeekStartDate() {
   else { const toMon = day === 0 ? 6 : day - 1; weekStart.setDate(today.getDate() - toMon); }
   weekStart.setHours(15, 0, 0, 0);
   return weekStart;
+}
+
+function getMonthStartDate() {
+  const today = new Date();
+  const first = new Date(today.getFullYear(), today.getMonth(), 1, 15, 0, 0, 0);
+  // If today is the 1st and before 15:00, use previous month's 1st
+  if (today.getDate() === 1 && today.getHours() < 15) {
+    first.setMonth(first.getMonth() - 1);
+  }
+  return first;
+}
+
+function getYearStartDate() {
+  const today = new Date();
+  const jan1 = new Date(today.getFullYear(), 0, 1, 15, 0, 0, 0);
+  // If today is Jan 1st and before 15:00, use previous year's Jan 1st
+  if (today.getMonth() === 0 && today.getDate() === 1 && today.getHours() < 15) {
+    jan1.setFullYear(jan1.getFullYear() - 1);
+  }
+  return jan1;
 }
 
 // Calculate trend: (livePrice - startPrice) / startPrice * 100
@@ -530,15 +555,10 @@ async function updateSP500Trends() {
     const { timestamps, prices } = history;
     const livePrice = liveData.price;
 
-    const today = new Date();
-    const weekStart = getWeekStartDate();
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const yearStart = new Date(today.getFullYear(), 0, 1);
-
-    // Find starting price for each period, compare to LIVE price
-    const weekPrice = findPriceAtDate(timestamps, prices, weekStart);
-    const monthPrice = findPriceAtDate(timestamps, prices, monthStart);
-    const yearPrice = findPriceAtDate(timestamps, prices, yearStart);
+    // Find starting price for each period (all reset at 15:00), compare to LIVE price
+    const weekPrice = findPriceAtDate(timestamps, prices, getWeekStartDate());
+    const monthPrice = findPriceAtDate(timestamps, prices, getMonthStartDate());
+    const yearPrice = findPriceAtDate(timestamps, prices, getYearStartDate());
 
     el.weekChange.innerHTML = formatTrendChange(calcTrend(weekPrice, livePrice) ?? 0);
     el.monthChange.innerHTML = formatTrendChange(calcTrend(monthPrice, livePrice) ?? 0);
@@ -560,10 +580,9 @@ async function updatePortfolioTrends() {
       api.getLivePrices(symbols)
     ]);
 
-    const today = new Date();
     const weekStart = getWeekStartDate();
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const yearStart = new Date(today.getFullYear(), 0, 1);
+    const monthStart = getMonthStartDate();
+    const yearStart = getYearStartDate();
 
     let totalWeekChange = 0, totalMonthChange = 0, totalYearChange = 0;
     let totalCurrentValue = 0;
