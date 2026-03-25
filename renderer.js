@@ -956,56 +956,113 @@ function drawSparkline(points, previousClose) {
   const minP = Math.min(...prices);
   const maxP = Math.max(...prices);
   const range = maxP - minP || 1;
-  const padding = 2;
+  const pad = 2;
+  const ref = previousClose || prices[0];
 
-  // Determine color: green if last > previousClose, red if below
-  const lastPrice = prices[prices.length - 1];
-  const isPositive = lastPrice >= (previousClose || prices[0]);
-  const lineColor = isPositive ? '#4ade80' : '#f87171';
-  const fillColor = isPositive ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)';
+  const GREEN = '#4ade80';
+  const RED = '#f87171';
+  const GREEN_FILL = 'rgba(74, 222, 128, 0.10)';
+  const RED_FILL = 'rgba(248, 113, 113, 0.10)';
 
-  // Draw previous close reference line (dashed)
-  if (previousClose && previousClose >= minP && previousClose <= maxP) {
-    const refY = h - padding - ((previousClose - minP) / range) * (h - padding * 2);
-    ctx.beginPath();
-    ctx.setLineDash([2, 3]);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.lineWidth = 0.5;
-    ctx.moveTo(0, refY);
-    ctx.lineTo(w, refY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // Build path
+  function priceToY(p) { return h - pad - ((p - minP) / range) * (h - pad * 2); }
   const stepX = w / (prices.length - 1);
+  const refY = priceToY(ref);
+
+  // Draw reference line (dashed)
   ctx.beginPath();
-  for (let i = 0; i < prices.length; i++) {
-    const x = i * stepX;
-    const y = h - padding - ((prices[i] - minP) / range) * (h - padding * 2);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-
-  // Stroke the line
-  ctx.strokeStyle = lineColor;
-  ctx.lineWidth = 1.2;
-  ctx.lineJoin = 'round';
+  ctx.setLineDash([2, 3]);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = 0.5;
+  ctx.moveTo(0, refY);
+  ctx.lineTo(w, refY);
   ctx.stroke();
+  ctx.setLineDash([]);
 
-  // Fill area under the line
-  const lastX = (prices.length - 1) * stepX;
-  ctx.lineTo(lastX, h);
-  ctx.lineTo(0, h);
-  ctx.closePath();
-  ctx.fillStyle = fillColor;
-  ctx.fill();
+  // Draw segments: green above ref, red below ref
+  // Each segment is a line + filled area between line and refY
+  for (let i = 0; i < prices.length - 1; i++) {
+    const x1 = i * stepX;
+    const x2 = (i + 1) * stepX;
+    const y1 = priceToY(prices[i]);
+    const y2 = priceToY(prices[i + 1]);
+    const p1 = prices[i];
+    const p2 = prices[i + 1];
+
+    // Check if segment crosses the reference line
+    const above1 = p1 >= ref;
+    const above2 = p2 >= ref;
+
+    if (above1 === above2) {
+      // Whole segment same side — draw in one color
+      const color = above1 ? GREEN : RED;
+      const fill = above1 ? GREEN_FILL : RED_FILL;
+
+      // Line
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      // Fill between line and refY
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x2, refY);
+      ctx.lineTo(x1, refY);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+    } else {
+      // Segment crosses reference — split at intersection
+      const t = (ref - p1) / (p2 - p1); // 0..1
+      const crossX = x1 + t * (x2 - x1);
+
+      // First half
+      const color1 = above1 ? GREEN : RED;
+      const fill1 = above1 ? GREEN_FILL : RED_FILL;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(crossX, refY);
+      ctx.strokeStyle = color1;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(crossX, refY);
+      ctx.lineTo(x1, refY);
+      ctx.closePath();
+      ctx.fillStyle = fill1;
+      ctx.fill();
+
+      // Second half
+      const color2 = above2 ? GREEN : RED;
+      const fill2 = above2 ? GREEN_FILL : RED_FILL;
+      ctx.beginPath();
+      ctx.moveTo(crossX, refY);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = color2;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(crossX, refY);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x2, refY);
+      ctx.closePath();
+      ctx.fillStyle = fill2;
+      ctx.fill();
+    }
+  }
 
   // Draw current price dot
-  const lastY = h - padding - ((lastPrice - minP) / range) * (h - padding * 2);
+  const lastPrice = prices[prices.length - 1];
+  const lastX = (prices.length - 1) * stepX;
+  const lastY = priceToY(lastPrice);
+  const dotColor = lastPrice >= ref ? GREEN : RED;
   ctx.beginPath();
   ctx.arc(lastX, lastY, 2, 0, Math.PI * 2);
-  ctx.fillStyle = lineColor;
+  ctx.fillStyle = dotColor;
   ctx.fill();
 }
 
