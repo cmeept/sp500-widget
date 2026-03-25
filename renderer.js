@@ -495,23 +495,17 @@ function setTrendsPlaceholder() {
   el.yearChange.innerHTML = TREND_PLACEHOLDER;
 }
 
-// Find the closest price at or after a given date using timestamps
-function findPriceAtDate(timestamps, prices, targetDate) {
+// Find the last valid closing price BEFORE a given date.
+// This ensures the first day of the period is included in the change.
+// E.g. for week starting Monday: returns Friday's close → Monday's change is counted.
+function findLastPriceBefore(timestamps, prices, targetDate) {
   const targetTs = targetDate.getTime() / 1000;
-  // Binary search for closest timestamp >= targetDate
-  let lo = 0, hi = timestamps.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (timestamps[mid] < targetTs) lo = mid + 1;
-    else hi = mid;
+  let lastValid = 0;
+  for (let i = 0; i < timestamps.length; i++) {
+    if (timestamps[i] >= targetTs) break;
+    if (prices[i] && prices[i] > 0) lastValid = i;
   }
-  // Also check the one before in case it's closer
-  if (lo > 0) {
-    const diffBefore = Math.abs(timestamps[lo - 1] - targetTs);
-    const diffAt = Math.abs(timestamps[lo] - targetTs);
-    if (diffBefore < diffAt) lo = lo - 1;
-  }
-  return prices[lo] || 0;
+  return prices[lastValid] || 0;
 }
 
 // All periods reset at 15:00 local time:
@@ -571,9 +565,9 @@ async function updateSP500Trends() {
     const livePrice = liveData.price;
 
     // Find starting price for each period (all reset at 15:00), compare to LIVE price
-    const weekPrice = findPriceAtDate(timestamps, prices, getWeekStartDate());
-    const monthPrice = findPriceAtDate(timestamps, prices, getMonthStartDate());
-    const yearPrice = findPriceAtDate(timestamps, prices, getYearStartDate());
+    const weekPrice = findLastPriceBefore(timestamps, prices, getWeekStartDate());
+    const monthPrice = findLastPriceBefore(timestamps, prices, getMonthStartDate());
+    const yearPrice = findLastPriceBefore(timestamps, prices, getYearStartDate());
 
     el.weekChange.innerHTML = formatTrendChange(calcTrend(weekPrice, livePrice) ?? 0);
     el.monthChange.innerHTML = formatTrendChange(calcTrend(monthPrice, livePrice) ?? 0);
@@ -614,9 +608,9 @@ async function updatePortfolioTrends() {
 
       const stockValue = stock.shares * livePrice;
 
-      const weekPrice = findPriceAtDate(timestamps, prices, weekStart);
-      const monthPrice = findPriceAtDate(timestamps, prices, monthStart);
-      const yearPrice = findPriceAtDate(timestamps, prices, yearStart);
+      const weekPrice = findLastPriceBefore(timestamps, prices, weekStart);
+      const monthPrice = findLastPriceBefore(timestamps, prices, monthStart);
+      const yearPrice = findLastPriceBefore(timestamps, prices, yearStart);
 
       if (weekPrice > 0) totalWeekChange += ((livePrice - weekPrice) / weekPrice) * 100 * stockValue;
       if (monthPrice > 0) totalMonthChange += ((livePrice - monthPrice) / monthPrice) * 100 * stockValue;
@@ -814,7 +808,7 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
     }
 
     // Reference price = close before month started
-    const refPrice = findPriceAtDate(timestamps, prices, monthStart);
+    const refPrice = findLastPriceBefore(timestamps, prices, monthStart);
 
     if (mondays.length === 0) {
       // No Mondays yet this month — just one partial week
