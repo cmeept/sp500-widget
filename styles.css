@@ -18,7 +18,7 @@ html, body {
   overflow: hidden;
   -webkit-app-region: drag;
   user-select: none;
-  min-height: 195px;
+  min-height: 210px;
 }
 
 /* ===== Widget container ===== */
@@ -33,7 +33,7 @@ html, body {
   border-radius: 20px;
   padding: 14px;
   width: 290px;
-  height: 195px;
+  height: 210px;
   position: relative;
   overflow: hidden;
   box-sizing: border-box;
@@ -41,9 +41,9 @@ html, body {
 }
 
 .widget-container:not(.expanded):not(.detail-open) {
-  height: 195px !important;
-  min-height: 195px !important;
-  max-height: 195px !important;
+  height: 210px !important;
+  min-height: 210px !important;
+  max-height: 210px !important;
 }
 
 .widget-container.detail-open {
@@ -241,6 +241,50 @@ html, body {
   animation: fadeInUp 0.6s ease forwards;
   line-height: 1;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* ===== Market status ===== */
+
+.market-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 9px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  padding: 2px 0;
+  letter-spacing: 0.3px;
+}
+
+.market-status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.market-status-dot.open      { background: #4ade80; box-shadow: 0 0 4px rgba(74, 222, 128, 0.6); }
+.market-status-dot.pre       { background: #fbbf24; box-shadow: 0 0 4px rgba(251, 191, 36, 0.6); }
+.market-status-dot.after     { background: #fb923c; box-shadow: 0 0 4px rgba(251, 146, 60, 0.6); }
+.market-status-dot.closed    { background: #f87171; box-shadow: 0 0 4px rgba(248, 113, 113, 0.4); }
+
+.market-status-dot.open {
+  animation: pulse-green 2s ease-in-out infinite;
+}
+
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 4px rgba(74, 222, 128, 0.6); }
+  50% { box-shadow: 0 0 8px rgba(74, 222, 128, 0.9); }
+}
+
+.market-status-label {
+  text-transform: uppercase;
+}
+
+.market-status-countdown {
+  color: rgba(255, 255, 255, 0.35);
+  font-weight: 400;
 }
 
 /* ===== Sparkline chart ===== */

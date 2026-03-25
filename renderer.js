@@ -31,6 +31,7 @@ const el = {
   weekChange: document.getElementById('weekChange'),
   monthChange: document.getElementById('monthChange'),
   yearChange: document.getElementById('yearChange'),
+  marketStatus: document.getElementById('marketStatus'),
   sparklineCanvas: document.getElementById('sparklineCanvas'),
   sparklineToggle: document.getElementById('sparklineToggle'),
   trendWeek: document.getElementById('trendWeek'),
@@ -168,7 +169,7 @@ function resizeWindowToContent() {
   const container = document.querySelector('.widget-container');
   if (!container) return;
   setTimeout(() => {
-    const height = isExpanded ? Math.max(container.scrollHeight, container.offsetHeight) : 195;
+    const height = isExpanded ? Math.max(container.scrollHeight, container.offsetHeight) : 210;
     api.resizeToContent(height);
   }, 350);
 }
@@ -926,6 +927,111 @@ async function renderPortfolioTrendDetail(period) {
 }
 
 // ============================================================
+// Market status (Open / Closed / Pre-Market / After-Hours)
+// ============================================================
+
+// NYSE holidays 2025-2027 (dates when market is fully closed)
+const NYSE_HOLIDAYS = [
+  // 2025
+  '2025-01-01','2025-01-20','2025-02-17','2025-04-18','2025-05-26',
+  '2025-06-19','2025-07-04','2025-09-01','2025-11-27','2025-12-25',
+  // 2026
+  '2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25',
+  '2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25',
+  // 2027
+  '2027-01-01','2027-01-18','2027-02-15','2027-03-26','2027-05-31',
+  '2027-06-18','2027-07-05','2027-09-06','2027-11-25','2027-12-24',
+];
+
+function getMarketStatus() {
+  // All times in ET (Eastern Time)
+  const now = new Date();
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = et.getDay(); // 0=Sun, 6=Sat
+  const hours = et.getHours();
+  const mins = et.getMinutes();
+  const timeInMins = hours * 60 + mins;
+
+  // Check if today is a holiday
+  const dateStr = `${et.getFullYear()}-${String(et.getMonth()+1).padStart(2,'0')}-${String(et.getDate()).padStart(2,'0')}`;
+  const isHoliday = NYSE_HOLIDAYS.includes(dateStr);
+  const isWeekend = day === 0 || day === 6;
+
+  // Market hours (in minutes from midnight ET)
+  const PRE_OPEN = 4 * 60;       // 4:00 AM
+  const MARKET_OPEN = 9 * 60 + 30; // 9:30 AM
+  const MARKET_CLOSE = 16 * 60;    // 4:00 PM
+  const AFTER_CLOSE = 20 * 60;     // 8:00 PM
+
+  let status, label, countdown;
+
+  if (isWeekend || isHoliday) {
+    status = 'closed';
+    label = isHoliday ? 'Holiday' : 'Closed';
+    countdown = getNextOpenCountdown(et, day, isHoliday);
+  } else if (timeInMins < PRE_OPEN) {
+    status = 'closed';
+    label = 'Closed';
+    countdown = formatCountdown(PRE_OPEN - timeInMins);
+    countdown = `pre-market in ${countdown}`;
+  } else if (timeInMins < MARKET_OPEN) {
+    status = 'pre';
+    label = 'Pre-Market';
+    countdown = formatCountdown(MARKET_OPEN - timeInMins);
+    countdown = `opens in ${countdown}`;
+  } else if (timeInMins < MARKET_CLOSE) {
+    status = 'open';
+    label = 'Open';
+    countdown = formatCountdown(MARKET_CLOSE - timeInMins);
+    countdown = `closes in ${countdown}`;
+  } else if (timeInMins < AFTER_CLOSE) {
+    status = 'after';
+    label = 'After-Hours';
+    countdown = formatCountdown(AFTER_CLOSE - timeInMins);
+    countdown = `ends in ${countdown}`;
+  } else {
+    status = 'closed';
+    label = 'Closed';
+    countdown = getNextOpenCountdown(et, day, false);
+  }
+
+  return { status, label, countdown };
+}
+
+function formatCountdown(totalMins) {
+  if (totalMins <= 0) return '';
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function getNextOpenCountdown(et, day, isHoliday) {
+  // Calculate minutes until next pre-market (4:00 AM ET next trading day)
+  let daysUntil = 1;
+  if (day === 5) daysUntil = 3;       // Friday → Monday
+  else if (day === 6) daysUntil = 2;   // Saturday → Monday
+  // If holiday on a weekday, add 1 more day
+  if (isHoliday && day >= 1 && day <= 5) daysUntil = 1;
+
+  const minsLeftToday = (24 * 60) - (et.getHours() * 60 + et.getMinutes());
+  const totalMins = minsLeftToday + (daysUntil - 1) * 24 * 60 + 9 * 60 + 30; // until 9:30 AM
+
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  return `opens in ${h}h ${m}m`;
+}
+
+function updateMarketStatus() {
+  const { status, label, countdown } = getMarketStatus();
+  el.marketStatus.innerHTML = `
+    <span class="market-status-dot ${status}"></span>
+    <span class="market-status-label">${label}</span>
+    <span class="market-status-countdown">${countdown ? '\u00b7 ' + countdown : ''}</span>
+  `;
+}
+
+// ============================================================
 // Sparkline chart
 // ============================================================
 
@@ -1170,6 +1276,9 @@ function startAutoUpdate() {
 
   // Freshness check every 30s
   setInterval(checkDataFreshness, 30_000);
+
+  // Market status every 60s (countdown updates)
+  setInterval(updateMarketStatus, 60_000);
 }
 
 // ============================================================
@@ -1185,7 +1294,7 @@ async function initialize() {
     el.trendIndicators.style.display = 'grid';
   }
   updateMarketOverviewLayout();
-  setTimeout(() => { updateSP500Price(); updateSparkline(); startAutoUpdate(); }, 500);
+  setTimeout(() => { updateSP500Price(); updateSparkline(); updateMarketStatus(); startAutoUpdate(); }, 500);
 }
 
 // Show content immediately with placeholders
