@@ -79,7 +79,7 @@ let mainWindow = null;
 let isExpanded = false;
 
 const WIDGET_WIDTH = 290;
-const COLLAPSED_HEIGHT = 235;
+const COLLAPSED_HEIGHT = 220;
 const BASE_EXPANDED_HEIGHT = 250;
 const FORM_HEIGHT = 120;
 const STOCK_ITEM_HEIGHT = 22;
