@@ -1,7 +1,7 @@
 {
   "name": "sp500-widget",
   "productName": "S&P 500 Widget",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Beautiful S&P 500 market data widget with portfolio tracking for your desktop",
   "main": "main.js",
   "author": {
