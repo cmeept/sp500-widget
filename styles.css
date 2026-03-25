@@ -302,6 +302,59 @@ html, body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
+.trend-item.active {
+  background: rgba(74, 222, 128, 0.15);
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+/* ===== Trend detail panel ===== */
+
+.trend-detail {
+  display: none;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  animation: slideDown 0.3s ease-out;
+  -webkit-app-region: no-drag;
+}
+
+.trend-detail.visible {
+  display: block;
+}
+
+.trend-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  transition: background 0.2s ease;
+}
+
+.trend-detail-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.trend-detail-row.current {
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.15);
+  border-radius: 5px;
+}
+
+.trend-detail-label {
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 500;
+  min-width: 50px;
+}
+
+.trend-detail-value {
+  font-weight: 700;
+  font-size: 10px;
+}
+
 .trend-label {
   font-size: 10px;
   color: rgba(255, 255, 255, 0.6);

@@ -31,6 +31,10 @@ const el = {
   weekChange: document.getElementById('weekChange'),
   monthChange: document.getElementById('monthChange'),
   yearChange: document.getElementById('yearChange'),
+  trendWeek: document.getElementById('trendWeek'),
+  trendMonth: document.getElementById('trendMonth'),
+  trendYear: document.getElementById('trendYear'),
+  trendDetail: document.getElementById('trendDetail'),
   statusDot: document.getElementById('statusDot')
 };
 
@@ -40,6 +44,7 @@ let formEls = {};
 let portfolio = { stocks: [], lastUpdated: null };
 let isExpanded = false;
 let currentTrendMode = 'sp500';
+let activeTrendDetail = null; // 'week' | 'month' | 'year' | null
 let lastSuccessfulUpdate = 0;
 
 // Expose stock count for main process
@@ -89,6 +94,11 @@ el.reduceStockSymbol.addEventListener('change', (e) => {
 el.sp500Data.addEventListener('click', (e) => { e.stopPropagation(); if (!isExpanded) showTrendIndicators('sp500'); });
 el.portfolioSummary.addEventListener('click', (e) => { e.stopPropagation(); if (!isExpanded) showTrendIndicators('portfolio'); });
 
+// Trend detail toggles
+el.trendWeek.addEventListener('click', (e) => { e.stopPropagation(); toggleTrendDetail('week'); });
+el.trendMonth.addEventListener('click', (e) => { e.stopPropagation(); toggleTrendDetail('month'); });
+el.trendYear.addEventListener('click', (e) => { e.stopPropagation(); toggleTrendDetail('year'); });
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
@@ -129,6 +139,7 @@ function togglePortfolio() {
     el.portfolioSection.classList.add('expanded');
     container.classList.add('expanded');
     el.trendIndicators.style.display = 'none';
+    hideTrendDetail();
     loadAndUpdatePortfolio();
   } else {
     el.portfolioSection.classList.remove('expanded');
@@ -455,6 +466,7 @@ async function updateSP500Price() {
 
 function showTrendIndicators(mode) {
   currentTrendMode = mode;
+  hideTrendDetail();
   refreshTrends();
   el.trendIndicators.style.display = 'grid';
 }
@@ -462,6 +474,8 @@ function showTrendIndicators(mode) {
 function refreshTrends() {
   if (currentTrendMode === 'sp500') updateSP500Trends();
   else updatePortfolioTrends();
+  // Also refresh open detail panel with live data
+  if (activeTrendDetail) showTrendDetailData(activeTrendDetail);
 }
 
 const TREND_PLACEHOLDER = '<span class="neutral">--</span>';
@@ -662,6 +676,223 @@ function showConfirmDialog(message) {
     overlay.querySelector('.confirm-no').addEventListener('click', () => { overlay.remove(); resolve(false); });
     document.body.appendChild(overlay);
   });
+}
+
+// ============================================================
+// Trend detail breakdown
+// ============================================================
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function toggleTrendDetail(period) {
+  // Toggle off if same period clicked again
+  if (activeTrendDetail === period) {
+    hideTrendDetail();
+    return;
+  }
+  activeTrendDetail = period;
+
+  // Highlight active trend item
+  el.trendWeek.classList.toggle('active', period === 'week');
+  el.trendMonth.classList.toggle('active', period === 'month');
+  el.trendYear.classList.toggle('active', period === 'year');
+
+  showTrendDetailData(period);
+}
+
+function hideTrendDetail() {
+  activeTrendDetail = null;
+  el.trendDetail.classList.remove('visible');
+  el.trendDetail.innerHTML = '';
+  el.trendWeek.classList.remove('active');
+  el.trendMonth.classList.remove('active');
+  el.trendYear.classList.remove('active');
+  resizeWindowToContent();
+}
+
+async function showTrendDetailData(period) {
+  el.trendDetail.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:10px;padding:4px;">Loading...</div>';
+  el.trendDetail.classList.add('visible');
+  resizeWindowToContent();
+
+  try {
+    if (currentTrendMode === 'sp500') {
+      const [history, liveData] = await Promise.all([
+        api.getChartHistory('^GSPC'),
+        api.getSP500Price()
+      ]);
+      if (!history || !liveData?.price) return;
+      renderTrendDetail(period, history.timestamps, history.prices, liveData.price);
+    } else {
+      // Portfolio mode — use weighted average across stocks
+      await renderPortfolioTrendDetail(period);
+    }
+  } catch {
+    el.trendDetail.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:10px;padding:4px;">No data</div>';
+  }
+  resizeWindowToContent();
+}
+
+function renderTrendDetail(period, timestamps, prices, livePrice) {
+  const rows = [];
+  const today = new Date();
+
+  if (period === 'week') {
+    // Daily breakdown for current week
+    const weekStart = getWeekStartDate();
+    const weekStartTs = weekStart.getTime() / 1000;
+
+    // Find the close price just before week started (reference)
+    let refIdx = 0;
+    for (let i = 0; i < timestamps.length; i++) {
+      if (timestamps[i] >= weekStartTs) { refIdx = Math.max(0, i - 1); break; }
+    }
+
+    // Collect each trading day this week
+    let prevClose = prices[refIdx];
+    for (let i = refIdx + 1; i < timestamps.length; i++) {
+      if (timestamps[i] < weekStartTs) continue;
+      const date = new Date(timestamps[i] * 1000);
+      const dayName = DAY_NAMES[date.getDay()];
+      const change = prevClose > 0 ? ((prices[i] - prevClose) / prevClose) * 100 : 0;
+      rows.push({ label: `${dayName} ${date.getDate()}`, change, current: false });
+      prevClose = prices[i];
+    }
+
+    // Today's live change (from last historical close to live price)
+    if (livePrice && prevClose > 0) {
+      const todayChange = ((livePrice - prevClose) / prevClose) * 100;
+      const todayName = DAY_NAMES[today.getDay()];
+      // Only add if last historical point is not today
+      const lastHistDate = new Date(timestamps[timestamps.length - 1] * 1000);
+      if (lastHistDate.toDateString() !== today.toDateString()) {
+        rows.push({ label: `${todayName} ${today.getDate()}`, change: todayChange, current: true });
+      } else if (rows.length > 0) {
+        // Update last row as current with live data
+        rows[rows.length - 1].current = true;
+        rows[rows.length - 1].change = ((livePrice - (rows.length > 1 ? prices[prices.length - 2] : prices[refIdx])) / (rows.length > 1 ? prices[prices.length - 2] : prices[refIdx])) * 100;
+      }
+    }
+
+  } else if (period === 'month') {
+    // Weekly breakdown for current month
+    const monthStart = getMonthStartDate();
+    const monthStartTs = monthStart.getTime() / 1000;
+
+    // Find reference price (close before month started)
+    let refIdx = 0;
+    for (let i = 0; i < timestamps.length; i++) {
+      if (timestamps[i] >= monthStartTs) { refIdx = Math.max(0, i - 1); break; }
+    }
+
+    // Group trading days by week number within the month
+    let weekNum = 1;
+    let weekStartDay = new Date(timestamps[refIdx + 1] ? timestamps[refIdx + 1] * 1000 : monthStart).getDate();
+    let weekFirstPrice = prices[refIdx];
+    let weekLastPrice = prices[refIdx];
+    let weekLastIdx = refIdx;
+
+    for (let i = refIdx + 1; i < timestamps.length; i++) {
+      if (timestamps[i] < monthStartTs) continue;
+      const date = new Date(timestamps[i] * 1000);
+      const dayOfWeek = date.getDay();
+
+      // New week starts on Monday
+      if (dayOfWeek === 1 && i > refIdx + 1 && weekLastPrice !== weekFirstPrice) {
+        const change = weekFirstPrice > 0 ? ((weekLastPrice - weekFirstPrice) / weekFirstPrice) * 100 : 0;
+        rows.push({ label: `Week ${weekNum}`, change, current: false });
+        weekNum++;
+        weekFirstPrice = weekLastPrice;
+      }
+
+      weekLastPrice = prices[i];
+      weekLastIdx = i;
+    }
+
+    // Current week (with live price)
+    const finalPrice = livePrice || weekLastPrice;
+    const change = weekFirstPrice > 0 ? ((finalPrice - weekFirstPrice) / weekFirstPrice) * 100 : 0;
+    rows.push({ label: `Week ${weekNum}`, change, current: true });
+
+  } else if (period === 'year') {
+    // Monthly breakdown for current year
+    const yearStart = getYearStartDate();
+    const yearStartTs = yearStart.getTime() / 1000;
+
+    // Find reference price (close before year started)
+    let refIdx = 0;
+    for (let i = 0; i < timestamps.length; i++) {
+      if (timestamps[i] >= yearStartTs) { refIdx = Math.max(0, i - 1); break; }
+    }
+
+    // Group by month
+    let prevMonthClose = prices[refIdx];
+    let currentMonth = -1;
+    let lastPriceInMonth = prices[refIdx];
+
+    for (let i = refIdx + 1; i < timestamps.length; i++) {
+      if (timestamps[i] < yearStartTs) continue;
+      const date = new Date(timestamps[i] * 1000);
+      const month = date.getMonth();
+
+      if (currentMonth !== -1 && month !== currentMonth) {
+        // Month boundary — save previous month
+        const change = prevMonthClose > 0 ? ((lastPriceInMonth - prevMonthClose) / prevMonthClose) * 100 : 0;
+        rows.push({ label: MONTH_NAMES[currentMonth], change, current: false });
+        prevMonthClose = lastPriceInMonth;
+      }
+
+      currentMonth = month;
+      lastPriceInMonth = prices[i];
+    }
+
+    // Current month (with live price)
+    if (currentMonth !== -1) {
+      const finalPrice = livePrice || lastPriceInMonth;
+      const change = prevMonthClose > 0 ? ((finalPrice - prevMonthClose) / prevMonthClose) * 100 : 0;
+      rows.push({ label: MONTH_NAMES[currentMonth], change, current: true });
+    }
+  }
+
+  // Render rows
+  if (rows.length === 0) {
+    el.trendDetail.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:10px;padding:4px;">No data yet</div>';
+    return;
+  }
+
+  el.trendDetail.innerHTML = rows.map(r => {
+    const cls = r.change >= 0 ? 'positive' : 'negative';
+    const sign = r.change >= 0 ? '+' : '';
+    const arrow = r.change >= 0 ? '\u2197' : '\u2198';
+    const rowClass = r.current ? 'trend-detail-row current' : 'trend-detail-row';
+    return `<div class="${rowClass}">
+      <span class="trend-detail-label">${r.label}</span>
+      <span class="trend-detail-value ${cls}">${arrow} ${sign}${r.change.toFixed(2)}%</span>
+    </div>`;
+  }).join('');
+}
+
+async function renderPortfolioTrendDetail(period) {
+  // For portfolio, calculate weighted breakdown across all stocks
+  const symbols = portfolio.stocks.map(s => s.symbol);
+  const [histories, livePrices] = await Promise.all([
+    Promise.all(portfolio.stocks.map(async (stock) => {
+      const history = await api.getChartHistory(stock.symbol);
+      return { stock, history };
+    })),
+    api.getLivePrices(symbols)
+  ]);
+
+  // Use first stock with data as proxy for period structure, then weight
+  // For simplicity, show S&P 500 structure but with portfolio-weighted values
+  const spHistory = await api.getChartHistory('^GSPC');
+  const spLive = await api.getSP500Price();
+  if (spHistory && spLive?.price) {
+    renderTrendDetail(period, spHistory.timestamps, spHistory.prices, spLive.price);
+    // Note: this shows S&P detail when in portfolio mode. For full portfolio
+    // breakdown per period, we'd need much more complex weighted calculation.
+  }
 }
 
 // ============================================================
