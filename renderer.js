@@ -466,6 +466,31 @@ function refreshTrends() {
 
 const TREND_PLACEHOLDER = '<span class="neutral">--</span>';
 
+// Append today's live price to historical adjclose data.
+// Historical data only contains completed trading days (yesterday's close).
+// During market hours, we need to add the current price as today's data point.
+function appendLivePrice(history, livePrice) {
+  if (!history?.timestamps || !history?.prices || !livePrice) {
+    return { timestamps: history?.timestamps || [], prices: history?.prices || [] };
+  }
+
+  const ts = [...history.timestamps];
+  const pr = [...history.prices];
+  const lastTs = ts[ts.length - 1];
+  const nowTs = Math.floor(Date.now() / 1000);
+
+  // If last data point is older than 18 hours, today's candle is missing — append live price
+  if (nowTs - lastTs > 64800) {
+    ts.push(nowTs);
+    pr.push(livePrice);
+  } else {
+    // Same day — update last price with live value
+    pr[pr.length - 1] = livePrice;
+  }
+
+  return { timestamps: ts, prices: pr };
+}
+
 function formatTrendChange(change) {
   const positive = change >= 0;
   const sign = positive ? '+' : '';
@@ -530,10 +555,16 @@ function calculateAccumulatedChange(timestamps, prices, startDate) {
 
 async function updateSP500Trends() {
   try {
-    const history = await api.getChartHistory('^GSPC');
+    // Fetch history + live price in parallel
+    const [history, liveData] = await Promise.all([
+      api.getChartHistory('^GSPC'),
+      api.getSP500Price()
+    ]);
     if (!history) return setTrendsPlaceholder();
 
-    const { timestamps, prices } = history;
+    // Append today's live price to historical data
+    const { timestamps, prices } = appendLivePrice(history, liveData?.price);
+
     const today = new Date();
     const weekStart = getWeekStartDate();
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -549,13 +580,15 @@ async function updatePortfolioTrends() {
   if (portfolio.stocks.length === 0) return setTrendsPlaceholder();
 
   try {
-    // Fetch all stock histories in parallel via main process (cached)
-    const histories = await Promise.all(
-      portfolio.stocks.map(async (stock) => {
+    // Fetch histories + live prices in parallel
+    const symbols = portfolio.stocks.map(s => s.symbol);
+    const [histories, livePrices] = await Promise.all([
+      Promise.all(portfolio.stocks.map(async (stock) => {
         const history = await api.getChartHistory(stock.symbol);
         return { stock, history };
-      })
-    );
+      })),
+      api.getLivePrices(symbols)
+    ]);
 
     const today = new Date();
     const weekStart = getWeekStartDate();
@@ -569,14 +602,16 @@ async function updatePortfolioTrends() {
     for (const { stock, history } of histories) {
       if (!history?.timestamps || !history?.prices) continue;
 
-      const { timestamps, prices } = history;
+      // Use live price for current value (includes today's intraday move)
+      const livePrice = livePrices?.[stock.symbol]?.price;
+      const { timestamps, prices } = appendLivePrice(history, livePrice);
+
       const lastIdx = prices.length - 1;
       const currentPrice = prices[lastIdx];
       if (!currentPrice || currentPrice <= 0) continue;
 
       const stockValue = stock.shares * currentPrice;
 
-      // Use correct date-based price lookup (not index offset)
       const weekPrice = findPriceAtDate(timestamps, prices, weekStart);
       const monthPrice = findPriceAtDate(timestamps, prices, monthStart);
       const yearPrice = findPriceAtDate(timestamps, prices, yearStart);
@@ -659,12 +694,12 @@ function startAutoUpdate() {
     }
   }, 15_000);
 
-  // Trend updates every 60s (historical data is cached 5 min in main process anyway)
+  // Trend updates every 30s (historical data cached 5 min, but live price updates each time)
   setInterval(() => {
     if (!isExpanded && el.trendIndicators.style.display === 'grid') {
       refreshTrends();
     }
-  }, 60_000);
+  }, 30_000);
 
   // Freshness check every 30s
   setInterval(checkDataFreshness, 30_000);
