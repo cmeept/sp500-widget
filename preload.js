@@ -12,8 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   expandWindowWithHeight: (stockCount) => ipcRenderer.send('expand-window-with-height', stockCount),
 
   // Resize growing upward (bottom stays, top moves up)
-  resizeUpward: (newHeight) => ipcRenderer.send('resize-upward', newHeight),
-  restoreCollapsed: () => ipcRenderer.send('restore-collapsed'),
+  resizeUpward: (newHeight, collapsedY) => ipcRenderer.send('resize-upward', newHeight, collapsedY),
+  restoreCollapsed: (collapsedY) => ipcRenderer.send('restore-collapsed', collapsedY),
+  getWindowPosition: () => ipcRenderer.invoke('get-window-position'),
 
   // Form visibility
   showAddForm: () => ipcRenderer.send('show-add-form'),

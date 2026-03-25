@@ -194,27 +194,22 @@ ipcMain.on('resize-to-content', (_event, height) => {
 });
 
 // Resize upward: bottom edge stays fixed, window grows up
-ipcMain.on('resize-upward', (_event, newHeight) => {
+// collapsedY = the Y position when detail was first opened (bottom anchor)
+ipcMain.on('resize-upward', (_event, newHeight, collapsedY) => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const [currentX, currentY] = mainWindow.getPosition();
-  const [, currentHeight] = mainWindow.getSize();
-  const deltaH = newHeight - currentHeight;
-  const newY = Math.max(0, currentY - deltaH);
+  const [currentX] = mainWindow.getPosition();
+  // Bottom edge = collapsedY + COLLAPSED_HEIGHT. New top = bottom - newHeight.
+  const bottomEdge = collapsedY + COLLAPSED_HEIGHT;
+  const newY = Math.max(0, bottomEdge - newHeight);
   mainWindow.setBounds({ x: currentX, y: newY, width: WIDGET_WIDTH, height: newHeight });
 });
 
-// Restore to collapsed height, move back down
-ipcMain.on('restore-collapsed', () => {
+// Restore to collapsed height at original position
+ipcMain.on('restore-collapsed', (_event, collapsedY) => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const pos = store.get('collapsedPosition');
-  if (pos) {
-    mainWindow.setBounds({ x: pos.x, y: pos.y, width: WIDGET_WIDTH, height: COLLAPSED_HEIGHT });
-  } else {
-    const [currentX, currentY] = mainWindow.getPosition();
-    const [, currentHeight] = mainWindow.getSize();
-    const newY = currentY + (currentHeight - COLLAPSED_HEIGHT);
-    mainWindow.setBounds({ x: currentX, y: newY, width: WIDGET_WIDTH, height: COLLAPSED_HEIGHT });
-  }
+  const [currentX] = mainWindow.getPosition();
+  const y = collapsedY != null ? collapsedY : currentX;
+  mainWindow.setBounds({ x: currentX, y: y, width: WIDGET_WIDTH, height: COLLAPSED_HEIGHT });
 });
 
 ipcMain.on('resize-for-stocks', (_event, stockCount) => resizeForStockCount(stockCount));
@@ -227,6 +222,12 @@ ipcMain.on('expand-window-with-height', (_event, stockCount) => {
   const y = Math.max(0, Math.min(Math.floor((screenHeight - height) / 2), screenHeight - height));
   mainWindow.setBounds({ x, y, width: WIDGET_WIDTH, height });
   savePosition(isExpanded);
+});
+
+ipcMain.handle('get-window-position', async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { x: 0, y: 0 };
+  const [x, y] = mainWindow.getPosition();
+  return { x, y };
 });
 
 ipcMain.on('show-add-form', () => resizeForStockCountFromRenderer(FORM_HEIGHT));

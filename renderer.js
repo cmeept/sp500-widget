@@ -45,6 +45,7 @@ let portfolio = { stocks: [], lastUpdated: null };
 let isExpanded = false;
 let currentTrendMode = 'sp500';
 let activeTrendDetail = null; // 'week' | 'month' | 'year' | null
+let detailCollapsedY = null; // saved Y position before detail opened
 let lastSuccessfulUpdate = 0;
 
 // Expose stock count for main process
@@ -685,12 +686,19 @@ function showConfirmDialog(message) {
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function toggleTrendDetail(period) {
+async function toggleTrendDetail(period) {
   // Toggle off if same period clicked again
   if (activeTrendDetail === period) {
     hideTrendDetail();
     return;
   }
+
+  // Save collapsed Y on first open (not when switching between week/month/year)
+  if (detailCollapsedY == null) {
+    const pos = await api.getWindowPosition();
+    detailCollapsedY = pos.y;
+  }
+
   activeTrendDetail = period;
 
   // Highlight active trend item
@@ -709,15 +717,19 @@ function hideTrendDetail() {
   el.trendMonth.classList.remove('active');
   el.trendYear.classList.remove('active');
   document.querySelector('.widget-container').classList.remove('detail-open');
-  api.restoreCollapsed();
+  if (detailCollapsedY != null) {
+    api.restoreCollapsed(detailCollapsedY);
+    detailCollapsedY = null;
+  }
 }
 
 function resizeForDetail() {
-  // Wait for DOM to render, then measure and resize upward
   setTimeout(() => {
     const container = document.querySelector('.widget-container');
     const h = Math.max(container.scrollHeight, container.offsetHeight) + 4;
-    api.resizeUpward(h);
+    if (detailCollapsedY != null) {
+      api.resizeUpward(h, detailCollapsedY);
+    }
   }, 50);
 }
 
@@ -754,6 +766,7 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
     // Daily breakdown for current week
     const weekStart = getWeekStartDate();
     const weekStartTs = weekStart.getTime() / 1000;
+    const todayStr = today.toDateString();
 
     // Find the close price just before week started (reference)
     let refIdx = 0;
@@ -761,30 +774,25 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
       if (timestamps[i] >= weekStartTs) { refIdx = Math.max(0, i - 1); break; }
     }
 
-    // Collect each trading day this week
+    // Collect each completed trading day this week (skip today — we'll use live price)
     let prevClose = prices[refIdx];
     for (let i = refIdx + 1; i < timestamps.length; i++) {
       if (timestamps[i] < weekStartTs) continue;
+      const price = prices[i];
+      if (!price || price <= 0) continue; // skip null/zero (incomplete day)
       const date = new Date(timestamps[i] * 1000);
+      if (date.toDateString() === todayStr) continue; // skip today from history
       const dayName = DAY_NAMES[date.getDay()];
-      const change = prevClose > 0 ? ((prices[i] - prevClose) / prevClose) * 100 : 0;
+      const change = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0;
       rows.push({ label: `${dayName} ${date.getDate()}`, change, current: false });
-      prevClose = prices[i];
+      prevClose = price;
     }
 
-    // Today's live change (from last historical close to live price)
+    // Today's row: always use live price vs last valid close
     if (livePrice && prevClose > 0) {
       const todayChange = ((livePrice - prevClose) / prevClose) * 100;
       const todayName = DAY_NAMES[today.getDay()];
-      // Only add if last historical point is not today
-      const lastHistDate = new Date(timestamps[timestamps.length - 1] * 1000);
-      if (lastHistDate.toDateString() !== today.toDateString()) {
-        rows.push({ label: `${todayName} ${today.getDate()}`, change: todayChange, current: true });
-      } else if (rows.length > 0) {
-        // Update last row as current with live data
-        rows[rows.length - 1].current = true;
-        rows[rows.length - 1].change = ((livePrice - (rows.length > 1 ? prices[prices.length - 2] : prices[refIdx])) / (rows.length > 1 ? prices[prices.length - 2] : prices[refIdx])) * 100;
-      }
+      rows.push({ label: `${todayName} ${today.getDate()}`, change: todayChange, current: true });
     }
 
   } else if (period === 'month') {
@@ -792,37 +800,30 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
     const monthStart = getMonthStartDate();
     const monthStartTs = monthStart.getTime() / 1000;
 
-    // Find reference price (close before month started)
     let refIdx = 0;
     for (let i = 0; i < timestamps.length; i++) {
       if (timestamps[i] >= monthStartTs) { refIdx = Math.max(0, i - 1); break; }
     }
 
-    // Group trading days by week number within the month
     let weekNum = 1;
-    let weekStartDay = new Date(timestamps[refIdx + 1] ? timestamps[refIdx + 1] * 1000 : monthStart).getDate();
     let weekFirstPrice = prices[refIdx];
     let weekLastPrice = prices[refIdx];
-    let weekLastIdx = refIdx;
 
     for (let i = refIdx + 1; i < timestamps.length; i++) {
       if (timestamps[i] < monthStartTs) continue;
+      const price = prices[i];
+      if (!price || price <= 0) continue;
       const date = new Date(timestamps[i] * 1000);
-      const dayOfWeek = date.getDay();
 
-      // New week starts on Monday
-      if (dayOfWeek === 1 && i > refIdx + 1 && weekLastPrice !== weekFirstPrice) {
+      if (date.getDay() === 1 && weekLastPrice !== weekFirstPrice) {
         const change = weekFirstPrice > 0 ? ((weekLastPrice - weekFirstPrice) / weekFirstPrice) * 100 : 0;
         rows.push({ label: `Week ${weekNum}`, change, current: false });
         weekNum++;
         weekFirstPrice = weekLastPrice;
       }
-
-      weekLastPrice = prices[i];
-      weekLastIdx = i;
+      weekLastPrice = price;
     }
 
-    // Current week (with live price)
     const finalPrice = livePrice || weekLastPrice;
     const change = weekFirstPrice > 0 ? ((finalPrice - weekFirstPrice) / weekFirstPrice) * 100 : 0;
     rows.push({ label: `Week ${weekNum}`, change, current: true });
@@ -832,19 +833,19 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
     const yearStart = getYearStartDate();
     const yearStartTs = yearStart.getTime() / 1000;
 
-    // Find reference price (close before year started)
     let refIdx = 0;
     for (let i = 0; i < timestamps.length; i++) {
       if (timestamps[i] >= yearStartTs) { refIdx = Math.max(0, i - 1); break; }
     }
 
-    // Group by month
     let prevMonthClose = prices[refIdx];
     let currentMonth = -1;
     let lastPriceInMonth = prices[refIdx];
 
     for (let i = refIdx + 1; i < timestamps.length; i++) {
       if (timestamps[i] < yearStartTs) continue;
+      const price = prices[i];
+      if (!price || price <= 0) continue;
       const date = new Date(timestamps[i] * 1000);
       const month = date.getMonth();
 
@@ -856,7 +857,7 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
       }
 
       currentMonth = month;
-      lastPriceInMonth = prices[i];
+      lastPriceInMonth = price;
     }
 
     // Current month (with live price)
