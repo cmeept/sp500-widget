@@ -790,86 +790,78 @@ function renderTrendDetail(period, timestamps, prices, livePrice) {
     }
 
   } else if (period === 'month') {
-    // Weekly breakdown for current month
-    // Each week: Monday close → next Monday close (matching WEEK trend logic)
+    // Weekly breakdown for current month.
+    // Each week measured the same way as WEEK trend:
+    // close_before_monday → close_before_next_monday (or live for current week)
     const monthStart = getMonthStartDate();
     const monthStartTs = monthStart.getTime() / 1000;
 
-    // Collect all Mondays in this month from the data
-    const mondays = [];
+    // Collect Monday DATES in this month (to use as week boundaries)
+    const mondayDates = [];
     for (let i = 0; i < timestamps.length; i++) {
       if (timestamps[i] < monthStartTs) continue;
-      const price = prices[i];
-      if (!price || price <= 0) continue;
+      if (!prices[i] || prices[i] <= 0) continue;
       const date = new Date(timestamps[i] * 1000);
-      if (date.getDay() === 1) {
-        mondays.push({ ts: timestamps[i], price, idx: i });
-      }
+      if (date.getDay() === 1) mondayDates.push(date);
     }
 
-    // Reference price = close before month started
+    // Month start reference = close before month started
     const refPrice = findLastPriceBefore(timestamps, prices, monthStart);
 
-    if (mondays.length === 0) {
-      // No Mondays yet this month — just one partial week
-      const change = refPrice > 0 ? ((livePrice - refPrice) / refPrice) * 100 : 0;
-      rows.push({ label: 'Week 1', change, current: true });
-    } else {
-      // Week 1: month start → first Monday
-      const w1change = refPrice > 0 ? ((mondays[0].price - refPrice) / refPrice) * 100 : 0;
-      rows.push({ label: 'Week 1', change: w1change, current: false });
-
-      // Middle weeks: Monday → next Monday
-      for (let w = 1; w < mondays.length; w++) {
-        const startP = mondays[w - 1].price;
-        const endP = mondays[w].price;
-        const change = startP > 0 ? ((endP - startP) / startP) * 100 : 0;
-        rows.push({ label: `Week ${w + 1}`, change, current: false });
+    // Build week boundaries: [refPrice, fri_before_mon1, fri_before_mon2, ..., livePrice]
+    const boundaries = [refPrice];
+    for (const monDate of mondayDates) {
+      const p = findLastPriceBefore(timestamps, prices, monDate);
+      // Only add if different from last boundary (avoid zero-change phantom weeks)
+      if (p > 0 && p !== boundaries[boundaries.length - 1]) {
+        boundaries.push(p);
       }
-
-      // Current week: last Monday → live price
-      const lastMondayPrice = mondays[mondays.length - 1].price;
-      const curChange = lastMondayPrice > 0 ? ((livePrice - lastMondayPrice) / lastMondayPrice) * 100 : 0;
-      rows.push({ label: `Week ${mondays.length + 1}`, change: curChange, current: true });
     }
 
+    // Completed weeks
+    for (let w = 1; w < boundaries.length; w++) {
+      const startP = boundaries[w - 1];
+      const endP = boundaries[w];
+      const change = startP > 0 ? ((endP - startP) / startP) * 100 : 0;
+      rows.push({ label: `Week ${w}`, change, current: false });
+    }
+
+    // Current week: same reference as WEEK trend (close before this Monday)
+    const curWeekRef = findLastPriceBefore(timestamps, prices, getWeekStartDate());
+    const curChange = curWeekRef > 0 ? ((livePrice - curWeekRef) / curWeekRef) * 100 : 0;
+    rows.push({ label: `Week ${boundaries.length}`, change: curChange, current: true });
+
   } else if (period === 'year') {
-    // Monthly breakdown for current year
+    // Monthly breakdown for current year.
+    // Each month: close_before_1st → close_before_next_1st (or live for current month)
     const yearStart = getYearStartDate();
     const yearStartTs = yearStart.getTime() / 1000;
 
-    let refIdx = 0;
-    for (let i = 0; i < timestamps.length; i++) {
-      if (timestamps[i] >= yearStartTs) { refIdx = Math.max(0, i - 1); break; }
-    }
+    // Reference = close before year started
+    const yearRef = findLastPriceBefore(timestamps, prices, yearStart);
 
-    let prevMonthClose = prices[refIdx];
-    let currentMonth = -1;
-    let lastPriceInMonth = prices[refIdx];
+    // For each month that has passed, find close before its 1st
+    const currentMonthIdx = today.getMonth();
+    let prevClose = yearRef;
 
-    for (let i = refIdx + 1; i < timestamps.length; i++) {
-      if (timestamps[i] < yearStartTs) continue;
-      const price = prices[i];
-      if (!price || price <= 0) continue;
-      const date = new Date(timestamps[i] * 1000);
-      const month = date.getMonth();
+    for (let m = 0; m <= currentMonthIdx; m++) {
+      const monthFirstDate = new Date(today.getFullYear(), m, 1, 15, 0, 0, 0);
 
-      if (currentMonth !== -1 && month !== currentMonth) {
-        // Month boundary — save previous month
-        const change = prevMonthClose > 0 ? ((lastPriceInMonth - prevMonthClose) / prevMonthClose) * 100 : 0;
-        rows.push({ label: MONTH_NAMES[currentMonth], change, current: false });
-        prevMonthClose = lastPriceInMonth;
+      if (m === currentMonthIdx) {
+        // Current month: same reference as MONTH trend
+        const curMonthRef = findLastPriceBefore(timestamps, prices, getMonthStartDate());
+        const change = curMonthRef > 0 ? ((livePrice - curMonthRef) / curMonthRef) * 100 : 0;
+        rows.push({ label: MONTH_NAMES[m], change, current: true });
+      } else {
+        // Completed month: close before this 1st → close before next 1st
+        const nextMonthDate = new Date(today.getFullYear(), m + 1, 1, 15, 0, 0, 0);
+        const endPrice = findLastPriceBefore(timestamps, prices, nextMonthDate);
+        if (endPrice > 0 && prevClose > 0) {
+          const change = ((endPrice - prevClose) / prevClose) * 100;
+          rows.push({ label: MONTH_NAMES[m], change, current: false });
+        }
+        prevClose = endPrice;
       }
-
-      currentMonth = month;
-      lastPriceInMonth = price;
-    }
-
-    // Current month (with live price)
-    if (currentMonth !== -1) {
-      const finalPrice = livePrice || lastPriceInMonth;
-      const change = prevMonthClose > 0 ? ((finalPrice - prevMonthClose) / prevMonthClose) * 100 : 0;
-      rows.push({ label: MONTH_NAMES[currentMonth], change, current: true });
     }
   }
 
