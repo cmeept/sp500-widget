@@ -273,25 +273,44 @@ ipcMain.handle('save-portfolio', async (_event, portfolio) => {
 // IPC — Market data (all fetches go through main process)
 // ============================================================
 
-// Get current S&P 500 price (cache 10s)
+// Get current S&P 500 price + extended hours (cache 10s)
 ipcMain.handle('get-sp500-price', async () => {
   const cacheKey = 'sp500-price';
   const cached = getCached(cacheKey, 10_000);
   if (cached) return cached;
 
   try {
-    const data = await fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=1d&interval=1m');
-    const result = data.chart?.result?.[0];
+    // Fetch S&P 500 index + ES futures (for pre/post market)
+    const [spData, futData] = await Promise.all([
+      fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=1d&interval=1m'),
+      fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/ES%3DF?range=1d&interval=1m').catch(() => null)
+    ]);
+
+    const result = spData.chart?.result?.[0];
     if (!result) return null;
 
     const meta = result.meta;
     const currentPrice = meta.regularMarketPrice || meta.previousClose;
     const previousClose = meta.previousClose;
+
+    // Extended hours from S&P futures (ES=F)
+    let extendedPrice = null;
+    let extendedChange = null;
+    if (futData?.chart?.result?.[0]) {
+      const futMeta = futData.chart.result[0].meta;
+      extendedPrice = futMeta.regularMarketPrice;
+      if (extendedPrice && previousClose) {
+        extendedChange = ((extendedPrice - currentPrice) / currentPrice) * 100;
+      }
+    }
+
     const payload = {
       price: currentPrice,
       previousClose,
       change: currentPrice - previousClose,
       changePercent: ((currentPrice - previousClose) / previousClose) * 100,
+      extendedPrice,
+      extendedChange,
       timestamp: Date.now()
     };
     setCache(cacheKey, payload);

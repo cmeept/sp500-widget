@@ -1022,12 +1022,27 @@ function getNextOpenCountdown(et, day, isHoliday) {
   return `opens in ${h}h ${m}m`;
 }
 
-function updateMarketStatus() {
+async function updateMarketStatus() {
   const { status, label, countdown } = getMarketStatus();
+  let extHtml = '';
+
+  // Show extended hours price for pre-market and after-hours
+  if (status === 'pre' || status === 'after' || status === 'closed') {
+    try {
+      const data = await api.getSP500Price();
+      if (data?.extendedPrice) {
+        const sign = (data.extendedChange || 0) >= 0 ? '+' : '';
+        const cls = (data.extendedChange || 0) >= 0 ? 'positive' : 'negative';
+        extHtml = `<span class="${cls}" style="font-weight:700;font-size:9px;">Futures ${data.extendedPrice.toFixed(0)} (${sign}${(data.extendedChange || 0).toFixed(2)}%)</span>`;
+      }
+    } catch { /* silent */ }
+  }
+
   el.marketStatus.innerHTML = `
     <span class="market-status-dot ${status}"></span>
     <span class="market-status-label">${label}</span>
     <span class="market-status-countdown">${countdown ? '\u00b7 ' + countdown : ''}</span>
+    ${extHtml}
   `;
 }
 
