@@ -23,12 +23,11 @@
     "build-portable": "electron-builder --win --config.win.target=portable --publish=never"
   },
   "dependencies": {
-    "electron-store": "^8.1.0",
-    "node-fetch": "^3.3.2"
+    "electron-store": "^8.2.0"
   },
   "devDependencies": {
-    "electron": "^37.2.1",
-    "electron-builder": "^24.13.3"
+    "electron": "^41.0.4",
+    "electron-builder": "^26.0.0"
   },
   "build": {
     "appId": "com.yourname.sp500widget",
@@ -38,6 +37,9 @@
     },
     "files": [
       "main.js",
+      "preload.js",
+      "renderer.js",
+      "styles.css",
       "index.html",
       "package.json",
       "icons/**/*"
@@ -69,8 +71,8 @@
       ],
       "icon": "icons/sp500_cool_transparent_ico256.ico",
       "requestedExecutionLevel": "asInvoker",
-      "publisherName": "S&P 500 Widget Team",
-      "verifyUpdateCodeSignature": false
+      "verifyUpdateCodeSignature": false,
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": [

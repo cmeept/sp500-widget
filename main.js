@@ -2,461 +2,343 @@ const { app, BrowserWindow, screen, ipcMain, Tray, Menu, nativeImage, dialog } =
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const Store = require('electron-store');
 
+// Single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
-
 if (!gotTheLock) {
   app.quit();
   process.exit(0);
 }
 
+// Persistent storage
+const store = new Store({
+  defaults: {
+    collapsedPosition: null,
+    expandedPosition: null,
+    portfolio: { stocks: [], lastUpdated: null },
+    migrated: false
+  }
+});
+
+// ============================================================
+// Migration from old version (v1.0.0 JSON files → electron-store)
+// ============================================================
+
+function migrateFromOldVersion() {
+  if (store.get('migrated')) return;
+
+  const homedir = os.homedir();
+  const oldPortfolioPath = path.join(homedir, '.sp500-widget-portfolio.json');
+  const oldConfigPath = path.join(homedir, '.sp500-widget-config.json');
+
+  try {
+    // Migrate portfolio data
+    if (fs.existsSync(oldPortfolioPath)) {
+      const data = JSON.parse(fs.readFileSync(oldPortfolioPath, 'utf8'));
+      if (data && data.stocks && data.stocks.length > 0) {
+        // Only migrate if new store has no stocks yet
+        const current = store.get('portfolio', { stocks: [] });
+        if (current.stocks.length === 0) {
+          store.set('portfolio', data);
+          console.log(`Migrated ${data.stocks.length} stocks from old portfolio`);
+        }
+      }
+      // Remove old file after successful migration
+      fs.unlinkSync(oldPortfolioPath);
+    }
+
+    // Migrate window position
+    if (fs.existsSync(oldConfigPath)) {
+      const config = JSON.parse(fs.readFileSync(oldConfigPath, 'utf8'));
+      if (config.collapsedPosition && !store.get('collapsedPosition')) {
+        store.set('collapsedPosition', config.collapsedPosition);
+      }
+      if (config.expandedPosition && !store.get('expandedPosition')) {
+        store.set('expandedPosition', config.expandedPosition);
+      }
+      // Remove old file
+      fs.unlinkSync(oldConfigPath);
+    }
+
+    // Clean up temp file
+    const oldTempPath = path.join(homedir, '.sp500-widget-temp.json');
+    if (fs.existsSync(oldTempPath)) fs.unlinkSync(oldTempPath);
+
+  } catch (err) {
+    console.error('Migration error (non-critical):', err.message);
+  }
+
+  store.set('migrated', true);
+}
+
+migrateFromOldVersion();
+
 let tray = null;
 let mainWindow = null;
 let isExpanded = false;
-const collapsedHeight = 160;
-const baseExpandedHeight = 250;
-const addFormHeight = 120; // Дополнительная высота для формы добавления
-const stockItemHeight = 22;
 
-// Функция для расчета максимальной высоты окна с учетом размера экрана
-function getMaxWindowHeight() {
-  const { height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  return Math.max(400, screenHeight - 100); // Минимум 400px, максимум - высота экрана минус 100px отступов
+const WIDGET_WIDTH = 290;
+const COLLAPSED_HEIGHT = 160;
+const BASE_EXPANDED_HEIGHT = 250;
+const FORM_HEIGHT = 120;
+const STOCK_ITEM_HEIGHT = 22;
+
+// ============================================================
+// Data cache — avoid hammering Yahoo Finance
+// ============================================================
+
+const cache = new Map();
+
+function getCached(key, maxAgeMs) {
+  const entry = cache.get(key);
+  if (entry && (Date.now() - entry.time) < maxAgeMs) return entry.data;
+  return null;
 }
 
-const configPath = path.join(os.homedir(), '.sp500-widget-config.json');
-const portfolioPath = path.join(os.homedir(), '.sp500-widget-portfolio.json');
+function setCache(key, data) {
+  cache.set(key, { data, time: Date.now() });
+}
 
-function saveWindowConfig(x, y, expanded = false) {
-  try {
-    // Загружаем существующий конфиг
-    let config = { collapsedPosition: null, expandedPosition: null };
-    if (fs.existsSync(configPath)) {
-      const configData = fs.readFileSync(configPath, 'utf8');
-      config = JSON.parse(configData);
+// ============================================================
+// Fetch with retry
+// ============================================================
+
+async function fetchWithRetry(url, retries = 2, delayMs = 1000) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await new Promise(r => setTimeout(r, delayMs * (attempt + 1)));
     }
-    
-    // Сохраняем позицию в соответствующем состоянии
-    if (expanded) {
-      config.expandedPosition = { x, y };
-    } else {
-      config.collapsedPosition = { x, y };
-    }
-    
-    config.lastSaved = new Date().toISOString();
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-  } catch (error) {
   }
 }
 
-ipcMain.on('resize-for-stocks', (event, stockCount) => {
+// ============================================================
+// Window helpers
+// ============================================================
+
+function getMaxWindowHeight() {
+  const { height } = screen.getPrimaryDisplay().workAreaSize;
+  return Math.max(400, height - 100);
+}
+
+function getScreenBounds() {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  return { screenWidth: width, screenHeight: height };
+}
+
+function clampPosition(x, y, windowWidth, windowHeight) {
+  const { screenWidth, screenHeight } = getScreenBounds();
+  return {
+    x: Math.max(0, Math.min(x, screenWidth - windowWidth)),
+    y: Math.max(0, Math.min(y, screenHeight - windowHeight))
+  };
+}
+
+function calcExpandedHeight(stockCount) {
+  return Math.min(BASE_EXPANDED_HEIGHT + stockCount * STOCK_ITEM_HEIGHT, getMaxWindowHeight());
+}
+
+function savePosition(expanded) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [x, y] = mainWindow.getPosition();
+  store.set(expanded ? 'expandedPosition' : 'collapsedPosition', { x, y });
+}
+
+function resizeWindow(height) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [currentX, currentY] = mainWindow.getPosition();
+  const { x, y } = clampPosition(currentX, currentY, WIDGET_WIDTH, height);
+  mainWindow.setBounds({ x, y, width: WIDGET_WIDTH, height });
+}
+
+function resizeForStockCount(stockCount, extraHeight = 0) {
   if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
-  
-  
-  const calculatedHeight = Math.min(
-    baseExpandedHeight + (stockCount * stockItemHeight),
+  const height = Math.min(
+    BASE_EXPANDED_HEIGHT + stockCount * STOCK_ITEM_HEIGHT + extraHeight,
     getMaxWindowHeight()
   );
-  
-  const [currentX, currentY] = mainWindow.getPosition();
-  const { height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  
-  // При изменении количества акций подстраиваем высоту, но стараемся сохранить позицию
-  let newY = currentY;
-  
-  // Если новая высота не помещается, корректируем позицию
-  if (currentY + calculatedHeight > screenHeight - 50) {
-    newY = Math.max(50, screenHeight - calculatedHeight - 50);
-  }
-  
-  // Убеждаемся, что окно не выходит за левую и правую границы экрана
-  const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-  const newX = Math.max(0, Math.min(currentX, screenWidth - 290));
-  
-  
-  mainWindow.setBounds({ 
-    x: newX, 
-    y: newY, 
-    width: 290, 
-    height: calculatedHeight 
-  });
-  
-  saveWindowConfig(newX, newY, isExpanded);
-});
-
-function loadWindowConfig() {
-  try {
-    if (fs.existsSync(configPath)) {
-      const configData = fs.readFileSync(configPath, 'utf8');
-      const config = JSON.parse(configData);
-      
-      // Всегда запускаем в свернутом виде
-      isExpanded = false;
-      
-      // Используем позицию свернутого состояния
-      if (config.collapsedPosition) {
-        const { x, y } = config.collapsedPosition;
-        const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-        
-        // Проверяем, что позиция в пределах экрана
-        if (x >= 0 && y >= 0 && x <= screenWidth - 290 && y <= screenHeight - collapsedHeight) {
-          return { x, y };
-        }
-      }
-      
-      // Fallback для старого формата конфига
-      if (config.windowPosition) {
-        const { x, y } = config.windowPosition;
-        const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-        
-        if (x >= 0 && y >= 0 && x <= screenWidth - 290 && y <= screenHeight - collapsedHeight) {
-          return { x, y };
-        }
-      }
-    }
-  } catch (error) {
-  }
-  
-  // Позиция по умолчанию
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-  isExpanded = false;
-  return { x: width - 310, y: height - 180 };
+  resizeWindow(height);
+  savePosition(isExpanded);
 }
 
-// IPC Handlers
+function resizeForStockCountFromRenderer(extraHeight) {
+  if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
+  mainWindow.webContents.executeJavaScript('window.__getStockCount ? window.__getStockCount() : 0')
+    .then(count => resizeForStockCount(count, extraHeight))
+    .catch(() => {});
+}
+
+// ============================================================
+// IPC — Window controls & resizing
+// ============================================================
+
 ipcMain.on('close-app', () => {
-  // Принудительно закрываем все окна перед выходом
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.destroy();
-    mainWindow = null;
-  }
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
   app.quit();
 });
+
 ipcMain.on('minimize-to-tray', () => { if (mainWindow) mainWindow.hide(); });
 
-// Обработчик для исправления полей через DevTools
-ipcMain.on('resize-to-content', (event, height) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try {
-      const [currentX, currentY] = mainWindow.getPosition();
-      
-      // Принудительно ограничиваем высоту для свернутого состояния
-      let finalHeight = height;
-      if (!isExpanded && height !== collapsedHeight) {
-        finalHeight = collapsedHeight;
-      }
-      
-      mainWindow.setBounds({ 
-        x: currentX, 
-        y: currentY, 
-        width: 290, 
-        height: finalHeight 
-      });
-    } catch (err) {
-      console.error('Error resizing window:', err);
+ipcMain.on('resize-to-content', (_event, height) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  resizeWindow((!isExpanded && height !== COLLAPSED_HEIGHT) ? COLLAPSED_HEIGHT : height);
+});
+
+ipcMain.on('resize-for-stocks', (_event, stockCount) => resizeForStockCount(stockCount));
+
+ipcMain.on('expand-window-with-height', (_event, stockCount) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const height = calcExpandedHeight(stockCount);
+  const { screenWidth, screenHeight } = getScreenBounds();
+  const x = Math.max(0, Math.min(Math.floor((screenWidth - WIDGET_WIDTH) / 2), screenWidth - WIDGET_WIDTH));
+  const y = Math.max(0, Math.min(Math.floor((screenHeight - height) / 2), screenHeight - height));
+  mainWindow.setBounds({ x, y, width: WIDGET_WIDTH, height });
+  savePosition(isExpanded);
+});
+
+ipcMain.on('show-add-form', () => resizeForStockCountFromRenderer(FORM_HEIGHT));
+ipcMain.on('hide-add-form', () => resizeForStockCountFromRenderer(0));
+ipcMain.on('show-reduce-form', () => resizeForStockCountFromRenderer(FORM_HEIGHT));
+ipcMain.on('hide-reduce-form', () => resizeForStockCountFromRenderer(0));
+
+ipcMain.on('toggle-expand', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [currentX, currentY] = mainWindow.getPosition();
+  isExpanded = !isExpanded;
+
+  if (isExpanded) {
+    store.set('collapsedPosition', { x: currentX, y: currentY });
+    mainWindow.webContents.send('get-stock-count-for-expand');
+  } else {
+    const pos = store.get('collapsedPosition');
+    if (pos) {
+      mainWindow.setBounds({ x: pos.x, y: pos.y, width: WIDGET_WIDTH, height: COLLAPSED_HEIGHT });
+    } else {
+      mainWindow.setBounds({ x: currentX, y: currentY, width: WIDGET_WIDTH, height: COLLAPSED_HEIGHT });
     }
+    savePosition(isExpanded);
   }
 });
 
-ipcMain.on('fix-fields-focus', () => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try {
-      // Убираем фокус с окна, делая его неактивным
-      mainWindow.blur();
-      
-      // Через короткое время возвращаем фокус
-      setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.focus();
-          // Отправляем сигнал обратно в renderer
-          mainWindow.webContents.send('focus-toggle-completed');
-        }
-      }, 10);
-    } catch (err) {
-    }
-  }
-});
+// ============================================================
+// IPC — Portfolio persistence
+// ============================================================
 
 ipcMain.handle('load-portfolio', async () => {
-  try {
-    if (fs.existsSync(portfolioPath)) {
-      const portfolioData = fs.readFileSync(portfolioPath, 'utf8');
-      return JSON.parse(portfolioData);
-    }
-    return { stocks: [], lastUpdated: null };
-  } catch (error) {
-    return { stocks: [], lastUpdated: null };
-  }
+  return store.get('portfolio', { stocks: [], lastUpdated: null });
 });
 
-ipcMain.handle('save-portfolio', async (event, portfolio) => {
+ipcMain.handle('save-portfolio', async (_event, portfolio) => {
   try {
-    const portfolioData = {
-      ...portfolio,
-      lastUpdated: new Date().toISOString()
-    };
-    fs.writeFileSync(portfolioPath, JSON.stringify(portfolioData, null, 2));
+    store.set('portfolio', { ...portfolio, lastUpdated: new Date().toISOString() });
     return true;
-  } catch (error) {
-    return false;
+  } catch { return false; }
+});
+
+// ============================================================
+// IPC — Market data (all fetches go through main process)
+// ============================================================
+
+// Get current S&P 500 price (cache 10s)
+ipcMain.handle('get-sp500-price', async () => {
+  const cacheKey = 'sp500-price';
+  const cached = getCached(cacheKey, 10_000);
+  if (cached) return cached;
+
+  try {
+    const data = await fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=1d&interval=1m');
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
+
+    const meta = result.meta;
+    const currentPrice = meta.regularMarketPrice || meta.previousClose;
+    const previousClose = meta.previousClose;
+    const payload = {
+      price: currentPrice,
+      previousClose,
+      change: currentPrice - previousClose,
+      changePercent: ((currentPrice - previousClose) / previousClose) * 100,
+      timestamp: Date.now()
+    };
+    setCache(cacheKey, payload);
+    return payload;
+  } catch {
+    return getCached(cacheKey, 120_000) || null; // stale cache up to 2 min
   }
 });
 
-ipcMain.handle('get-live-prices', async (event, symbols) => {
-  const prices = {};
-  
-  for (const symbol of symbols) {
-    try {
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      if (data.chart && data.chart.result && data.chart.result[0]) {
-        const result = data.chart.result[0];
-        const currentPrice = result.meta.regularMarketPrice || result.meta.previousClose;
-        const previousClose = result.meta.previousClose;
-        
-        prices[symbol] = {
+// Get 1-year historical data for a symbol (cache 5 min)
+ipcMain.handle('get-chart-history', async (_event, symbol) => {
+  const cacheKey = `history-${symbol}`;
+  const cached = getCached(cacheKey, 300_000); // 5 min
+  if (cached) return cached;
+
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`;
+    const data = await fetchWithRetry(url);
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
+
+    const payload = {
+      timestamps: result.timestamp,
+      prices: result.indicators.adjclose[0].adjclose,
+      fetchedAt: Date.now()
+    };
+    setCache(cacheKey, payload);
+    return payload;
+  } catch {
+    return getCached(cacheKey, 600_000) || null; // stale cache up to 10 min
+  }
+});
+
+// Get live prices for multiple symbols in parallel (cache 10s each)
+ipcMain.handle('get-live-prices', async (_event, symbols) => {
+  const results = await Promise.allSettled(
+    symbols.map(async (symbol) => {
+      const cacheKey = `price-${symbol}`;
+      const cached = getCached(cacheKey, 10_000);
+      if (cached) return { symbol, data: cached };
+
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`;
+      const data = await fetchWithRetry(url, 1, 500);
+
+      if (data.chart?.result?.[0]) {
+        const meta = data.chart.result[0].meta;
+        const currentPrice = meta.regularMarketPrice || meta.previousClose;
+        const previousClose = meta.previousClose;
+        const payload = {
           price: currentPrice,
           change: currentPrice - previousClose,
           changePercent: ((currentPrice - previousClose) / previousClose) * 100
         };
+        setCache(cacheKey, payload);
+        return { symbol, data: payload };
       }
-    } catch (error) {
-      prices[symbol] = null;
+      return { symbol, data: null };
+    })
+  );
+
+  const prices = {};
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) {
+      prices[r.value.symbol] = r.value.data;
     }
   }
-  
   return prices;
 });
 
-ipcMain.on('show-add-form', (event) => {
-  if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
-  
-  // Получаем количество акций из renderer процесса
-  mainWindow.webContents.executeJavaScript('portfolio.stocks.length')
-    .then(count => {
-      const calculatedHeight = Math.min(
-        baseExpandedHeight + (count * stockItemHeight) + addFormHeight,
-        getMaxWindowHeight()
-      );
-      
-      const [currentX, currentY] = mainWindow.getPosition();
-      const { height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-      
-      // Корректируем позицию если окно выходит за экран
-      let newY = currentY;
-      if (currentY + calculatedHeight > screenHeight - 50) {
-        newY = Math.max(50, screenHeight - calculatedHeight - 50);
-      }
-      
-      // Убеждаемся, что окно не выходит за левую и правую границы экрана
-      const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-      const newX = Math.max(0, Math.min(currentX, screenWidth - 290));
-      
-      
-      mainWindow.setBounds({ 
-        x: newX, 
-        y: newY, 
-        width: 290, 
-        height: calculatedHeight 
-      });
-    })
-});
-
-ipcMain.on('hide-add-form', (event) => {
-  if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
-  
-  // Получаем количество акций из renderer процесса
-  mainWindow.webContents.executeJavaScript('portfolio.stocks.length')
-    .then(count => {
-      const calculatedHeight = Math.min(
-        baseExpandedHeight + (count * stockItemHeight),
-        getMaxWindowHeight()
-      );
-      
-      const [currentX, currentY] = mainWindow.getPosition();
-      
-      
-      mainWindow.setBounds({ 
-        x: currentX, 
-        y: currentY, 
-        width: 290, 
-        height: calculatedHeight 
-      });
-    })
-});
-
-ipcMain.on('show-reduce-form', (event) => {
-  if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
-  
-  // Получаем количество акций из renderer процесса
-  mainWindow.webContents.executeJavaScript('portfolio.stocks.length')
-    .then(count => {
-      const calculatedHeight = Math.min(
-        baseExpandedHeight + (count * stockItemHeight) + addFormHeight,
-        getMaxWindowHeight()
-      );
-      
-      const [currentX, currentY] = mainWindow.getPosition();
-      const { height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-      
-      // Корректируем позицию если окно выходит за экран
-      let newY = currentY;
-      if (currentY + calculatedHeight > screenHeight - 50) {
-        newY = Math.max(50, screenHeight - calculatedHeight - 50);
-      }
-      
-      // Убеждаемся, что окно не выходит за левую и правую границы экрана
-      const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-      const newX = Math.max(0, Math.min(currentX, screenWidth - 290));
-      
-      
-      mainWindow.setBounds({ 
-        x: newX, 
-        y: newY, 
-        width: 290, 
-        height: calculatedHeight 
-      });
-    })
-});
-
-ipcMain.on('hide-reduce-form', (event) => {
-  if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
-  
-  // Получаем количество акций из renderer процесса
-  mainWindow.webContents.executeJavaScript('portfolio.stocks.length')
-    .then(count => {
-      const calculatedHeight = Math.min(
-        baseExpandedHeight + (count * stockItemHeight),
-        getMaxWindowHeight()
-      );
-      
-      const [currentX, currentY] = mainWindow.getPosition();
-      
-      
-      mainWindow.setBounds({ 
-        x: currentX, 
-        y: currentY, 
-        width: 290, 
-        height: calculatedHeight 
-      });
-    })
-});
-
-ipcMain.on('toggle-expand', () => {
-  
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  
-  const [currentX, currentY] = mainWindow.getPosition();
-  
-  isExpanded = !isExpanded;
-  
-  if (isExpanded) {
-    
-    // Сохраняем текущую позицию как "свернутую" для возврата
-    const tempConfigPath = path.join(os.homedir(), '.sp500-widget-temp.json');
-    const tempConfig = { 
-      collapsedPosition: { x: currentX, y: currentY },
-      timestamp: new Date().toISOString()
-    };
-    try {
-      fs.writeFileSync(tempConfigPath, JSON.stringify(tempConfig, null, 2));
-    } catch (error) {
-    }
-    
-    // Получаем количество акций для расчета высоты
-    mainWindow.webContents.send('get-stock-count-for-expand');
-  } else {
-    
-    // Возвращаемся к свернутому состоянию
-    // Сначала пробуем восстановить из временного файла
-    const tempConfigPath = path.join(os.homedir(), '.sp500-widget-temp.json');
-    try {
-      if (fs.existsSync(tempConfigPath)) {
-        const tempConfigData = fs.readFileSync(tempConfigPath, 'utf8');
-        const tempConfig = JSON.parse(tempConfigData);
-        if (tempConfig.collapsedPosition) {
-          const { x, y } = tempConfig.collapsedPosition;
-          mainWindow.setBounds({ x, y, width: 290, height: collapsedHeight });
-          saveWindowConfig(x, y, isExpanded);
-          
-          // Удаляем временный файл
-          fs.unlinkSync(tempConfigPath);
-          return;
-        }
-      }
-    } catch (error) {
-    }
-    
-    // Если нет временного файла, пробуем основной конфиг
-    try {
-      if (fs.existsSync(configPath)) {
-        const configData = fs.readFileSync(configPath, 'utf8');
-        const config = JSON.parse(configData);
-        if (config.collapsedPosition) {
-          const { x, y } = config.collapsedPosition;
-          mainWindow.setBounds({ x, y, width: 290, height: collapsedHeight });
-          saveWindowConfig(x, y, isExpanded);
-          return;
-        }
-      }
-    } catch (error) {
-    }
-    
-    // Fallback - просто изменяем размер без перемещения
-    mainWindow.setBounds({ 
-      x: currentX, 
-      y: currentY, 
-      width: 290, 
-      height: collapsedHeight 
-    });
-    saveWindowConfig(currentX, currentY, isExpanded);
-  }
-  
-});
-
-ipcMain.on('expand-window-with-height', (event, stockCount) => {
-  
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  
-  const calculatedHeight = Math.min(
-    baseExpandedHeight + (stockCount * stockItemHeight),
-    getMaxWindowHeight()
-  );
-  
-  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  
-  // Размещаем окно в центре экрана при расширении, но проверяем границы
-  let centerX = Math.floor((screenWidth - 290) / 2);
-  let centerY = Math.floor((screenHeight - calculatedHeight) / 2);
-  
-  // Убеждаемся, что окно не выходит за пределы экрана
-  centerX = Math.max(0, Math.min(centerX, screenWidth - 290));
-  centerY = Math.max(0, Math.min(centerY, screenHeight - calculatedHeight));
-  
-  
-  try {
-    mainWindow.setBounds({ 
-      x: centerX, 
-      y: centerY, 
-      width: 290, 
-      height: calculatedHeight 
-    });
-    
-    const [newX, newY] = mainWindow.getPosition();
-    const [newWidth, newHeight] = mainWindow.getSize();
-    
-    saveWindowConfig(centerX, centerY, isExpanded);
-    
-  } catch (error) {
-  }
-  
-});
+// ============================================================
+// Autostart
+// ============================================================
 
 function setupAutostart() {
   try {
@@ -466,88 +348,82 @@ function setupAutostart() {
       name: 'S&P 500 Widget',
       path: process.execPath
     });
-  } catch (error) {
-  }
+  } catch { /* not available on this platform */ }
 }
 
+// ============================================================
+// Tray
+// ============================================================
+
 function createTray() {
-  // Используем новую иконку PNG для трея | Use new PNG icon for tray
   const trayIconPath = path.join(__dirname, 'icons', 'sp500_cool_transparent_32x32.png');
   const trayIcon = nativeImage.createFromPath(trayIconPath);
   tray = new Tray(trayIcon);
-  
+
   const contextMenu = Menu.buildFromTemplate([
-    { 
-      label: 'Показать виджет', 
-      click: () => showWidget() 
-    },
-    { 
-      label: 'Скрыть виджет', 
-      click: () => hideWidget() 
-    },
+    { label: 'Show Widget', click: () => showWidget() },
+    { label: 'Hide Widget', click: () => hideWidget() },
     { type: 'separator' },
     {
-      label: 'О программе', 
+      label: 'About',
       click: () => {
         dialog.showMessageBox(null, {
           type: 'info',
-          title: 'О программе',
+          title: 'About',
           message: 'S&P 500 Widget v1.0.0',
-          detail: 'Красивый виджет с данными индекса S&P 500 и портфелем акций.\n\nФункции:\n• Отслеживание S&P 500\n• Управление портфелем\n• Актуальные котировки\n• Автозапуск с Windows'
+          detail: 'Desktop widget for S&P 500 tracking and portfolio management.\n\nFeatures:\n\u2022 S&P 500 index tracking\n\u2022 Portfolio management\n\u2022 Live quotes\n\u2022 Auto-start with Windows'
         });
       }
     },
     { type: 'separator' },
-    { 
-      label: 'Выход', 
-      click: () => app.quit() 
-    }
+    { label: 'Exit', click: () => app.quit() }
   ]);
-  
+
   tray.setToolTip('S&P 500 Widget - Market Tracker');
   tray.setContextMenu(contextMenu);
-  
   tray.on('double-click', () => {
-    if (mainWindow && mainWindow.isVisible() && !mainWindow.isDestroyed()) {
-      hideWidget();
-    } else {
-      showWidget();
-    }
+    if (mainWindow && mainWindow.isVisible() && !mainWindow.isDestroyed()) hideWidget();
+    else showWidget();
   });
 }
 
+// ============================================================
+// Window
+// ============================================================
+
 function showWidget() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    mainWindow.focus();
-    return;
-  }
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); return; }
   createWindow();
 }
 
 function hideWidget() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.hide();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+}
+
+function loadWindowPosition() {
+  const pos = store.get('collapsedPosition');
+  const { screenWidth, screenHeight } = getScreenBounds();
+  if (pos && pos.x >= 0 && pos.y >= 0 &&
+      pos.x <= screenWidth - WIDGET_WIDTH &&
+      pos.y <= screenHeight - COLLAPSED_HEIGHT) {
+    return pos;
   }
+  return { x: screenWidth - WIDGET_WIDTH - 20, y: screenHeight - COLLAPSED_HEIGHT - 20 };
 }
 
 function createWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.destroy();
-    mainWindow = null;
-  }
-  
-  const pos = loadWindowConfig();
-  const windowHeight = isExpanded ? baseExpandedHeight : collapsedHeight;
-  
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
+  isExpanded = false;
+  const pos = loadWindowPosition();
+
   mainWindow = new BrowserWindow({
-    width: 290,
-    height: windowHeight,
+    width: WIDGET_WIDTH,
+    height: COLLAPSED_HEIGHT,
     x: pos.x,
     y: pos.y,
     frame: false,
-    transparent: false,
-    backgroundColor: "#191929",
+    transparent: true,
+    backgroundColor: '#00000000',
     alwaysOnTop: false,
     icon: path.join(__dirname, 'icons', 'sp500_cool_transparent_ico256.ico'),
     titleBarStyle: 'hidden',
@@ -557,64 +433,39 @@ function createWindow() {
     skipTaskbar: true,
     show: false,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      enableRemoteModule: true,
-      devTools: false
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      devTools: process.argv.includes('--dev')
     }
   });
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
-  
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    // Всегда запускаем в свернутом виде
     isExpanded = false;
     mainWindow.webContents.send('set-expanded', false);
   });
-  
-  mainWindow.on('move', () => {
-    const [x, y] = mainWindow.getPosition();
-    saveWindowConfig(x, y, isExpanded);
-  });
-  
-  
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
+  mainWindow.on('move', () => savePosition(isExpanded));
+  mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-app.whenReady().then(() => {
-  createTray();
-  showWidget();
-  setupAutostart();
-});
+// ============================================================
+// App lifecycle
+// ============================================================
+
+app.whenReady().then(() => { createTray(); showWidget(); setupAutostart(); });
 
 app.on('second-instance', () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  } else {
-    showWidget();
-  }
+  if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); }
+  else showWidget();
 });
 
-app.on('window-all-closed', (e) => {
-  e.preventDefault();
-});
+app.on('window-all-closed', (e) => e.preventDefault());
 
 app.on('before-quit', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    const [x, y] = mainWindow.getPosition();
-    saveWindowConfig(x, y, isExpanded);
-    mainWindow.destroy();
-    mainWindow = null;
-  }
-});
-
-// Добавляем обработчик для принудительного завершения
-app.on('will-quit', (event) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
+    savePosition(isExpanded);
     mainWindow.destroy();
     mainWindow = null;
   }
