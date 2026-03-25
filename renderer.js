@@ -466,31 +466,6 @@ function refreshTrends() {
 
 const TREND_PLACEHOLDER = '<span class="neutral">--</span>';
 
-// Append today's live price to historical adjclose data.
-// Historical data only contains completed trading days (yesterday's close).
-// During market hours, we need to add the current price as today's data point.
-function appendLivePrice(history, livePrice) {
-  if (!history?.timestamps || !history?.prices || !livePrice) {
-    return { timestamps: history?.timestamps || [], prices: history?.prices || [] };
-  }
-
-  const ts = [...history.timestamps];
-  const pr = [...history.prices];
-  const lastTs = ts[ts.length - 1];
-  const nowTs = Math.floor(Date.now() / 1000);
-
-  // If last data point is older than 18 hours, today's candle is missing — append live price
-  if (nowTs - lastTs > 64800) {
-    ts.push(nowTs);
-    pr.push(livePrice);
-  } else {
-    // Same day — update last price with live value
-    pr[pr.length - 1] = livePrice;
-  }
-
-  return { timestamps: ts, prices: pr };
-}
-
 function formatTrendChange(change) {
   const positive = change >= 0;
   const sign = positive ? '+' : '';
@@ -536,21 +511,11 @@ function getWeekStartDate() {
   return weekStart;
 }
 
-// Accumulated daily % change from startDate (used for S&P 500)
-function calculateAccumulatedChange(timestamps, prices, startDate) {
-  const targetTs = startDate.getTime() / 1000;
-  let startIdx = 0;
-  for (let i = 0; i < timestamps.length; i++) {
-    if (timestamps[i] >= targetTs) { startIdx = i; break; }
-  }
-  let total = 0;
-  const last = prices.length - 1;
-  for (let i = Math.max(startIdx, 1); i <= last; i++) {
-    if (prices[i] && prices[i - 1] && prices[i - 1] > 0) {
-      total += ((prices[i] - prices[i - 1]) / prices[i - 1]) * 100;
-    }
-  }
-  return total;
+// Calculate trend: (livePrice - startPrice) / startPrice * 100
+// Uses live price directly — always includes today's intraday movement.
+function calcTrend(startPrice, livePrice) {
+  if (!startPrice || startPrice <= 0 || !livePrice) return null;
+  return ((livePrice - startPrice) / startPrice) * 100;
 }
 
 async function updateSP500Trends() {
@@ -560,19 +525,24 @@ async function updateSP500Trends() {
       api.getChartHistory('^GSPC'),
       api.getSP500Price()
     ]);
-    if (!history) return setTrendsPlaceholder();
+    if (!history || !liveData?.price) return setTrendsPlaceholder();
 
-    // Append today's live price to historical data
-    const { timestamps, prices } = appendLivePrice(history, liveData?.price);
+    const { timestamps, prices } = history;
+    const livePrice = liveData.price;
 
     const today = new Date();
     const weekStart = getWeekStartDate();
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
     const yearStart = new Date(today.getFullYear(), 0, 1);
 
-    el.weekChange.innerHTML = formatTrendChange(calculateAccumulatedChange(timestamps, prices, weekStart));
-    el.monthChange.innerHTML = formatTrendChange(calculateAccumulatedChange(timestamps, prices, monthStart));
-    el.yearChange.innerHTML = formatTrendChange(calculateAccumulatedChange(timestamps, prices, yearStart));
+    // Find starting price for each period, compare to LIVE price
+    const weekPrice = findPriceAtDate(timestamps, prices, weekStart);
+    const monthPrice = findPriceAtDate(timestamps, prices, monthStart);
+    const yearPrice = findPriceAtDate(timestamps, prices, yearStart);
+
+    el.weekChange.innerHTML = formatTrendChange(calcTrend(weekPrice, livePrice) ?? 0);
+    el.monthChange.innerHTML = formatTrendChange(calcTrend(monthPrice, livePrice) ?? 0);
+    el.yearChange.innerHTML = formatTrendChange(calcTrend(yearPrice, livePrice) ?? 0);
   } catch { setTrendsPlaceholder(); }
 }
 
@@ -602,23 +572,21 @@ async function updatePortfolioTrends() {
     for (const { stock, history } of histories) {
       if (!history?.timestamps || !history?.prices) continue;
 
-      // Use live price for current value (includes today's intraday move)
+      const { timestamps, prices } = history;
+
+      // Use LIVE price (not historical last close)
       const livePrice = livePrices?.[stock.symbol]?.price;
-      const { timestamps, prices } = appendLivePrice(history, livePrice);
+      if (!livePrice || livePrice <= 0) continue;
 
-      const lastIdx = prices.length - 1;
-      const currentPrice = prices[lastIdx];
-      if (!currentPrice || currentPrice <= 0) continue;
-
-      const stockValue = stock.shares * currentPrice;
+      const stockValue = stock.shares * livePrice;
 
       const weekPrice = findPriceAtDate(timestamps, prices, weekStart);
       const monthPrice = findPriceAtDate(timestamps, prices, monthStart);
       const yearPrice = findPriceAtDate(timestamps, prices, yearStart);
 
-      if (weekPrice > 0) totalWeekChange += ((currentPrice - weekPrice) / weekPrice) * 100 * stockValue;
-      if (monthPrice > 0) totalMonthChange += ((currentPrice - monthPrice) / monthPrice) * 100 * stockValue;
-      if (yearPrice > 0) totalYearChange += ((currentPrice - yearPrice) / yearPrice) * 100 * stockValue;
+      if (weekPrice > 0) totalWeekChange += ((livePrice - weekPrice) / weekPrice) * 100 * stockValue;
+      if (monthPrice > 0) totalMonthChange += ((livePrice - monthPrice) / monthPrice) * 100 * stockValue;
+      if (yearPrice > 0) totalYearChange += ((livePrice - yearPrice) / yearPrice) * 100 * stockValue;
 
       totalCurrentValue += stockValue;
       processed++;
