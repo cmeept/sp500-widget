@@ -52,6 +52,8 @@ let sparklineMode = '1D'; // '1D' or '1W'
 let activeTrendDetail = null; // 'week' | 'month' | 'year' | 'multiyear' | null
 let displayCurrency = 'ILS'; // 'ILS' or 'USD'
 let usdIlsRate = 3.12; // updated live
+let eurIlsRate = 3.45; // updated live
+let cashBalances = { ILS: 0, USD: 0, EUR: 0 }; // cash not invested
 let detailCollapsedY = null; // saved Y position before detail opened
 let lastSuccessfulUpdate = 0;
 
@@ -99,11 +101,21 @@ el.reduceStockSymbol.addEventListener('change', (e) => {
   } else { el.currentShares.value = ''; el.sellShares.max = ''; }
 });
 
+el.cashBtn = document.getElementById('cashBtn');
+el.cashBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  showCashForm();
+});
+
 el.currencyBtn.addEventListener('click', async (e) => {
   e.stopPropagation();
-  displayCurrency = displayCurrency === 'ILS' ? 'USD' : 'ILS';
-  el.currencyBtn.textContent = displayCurrency === 'ILS' ? '\u20aa' : '$';
-  el.currencyBtn.title = `Switch to ${displayCurrency === 'ILS' ? 'USD' : 'ILS'}`;
+  // Cycle: ILS → USD → EUR → ILS
+  if (displayCurrency === 'ILS') displayCurrency = 'USD';
+  else if (displayCurrency === 'USD') displayCurrency = 'EUR';
+  else displayCurrency = 'ILS';
+
+  const symbols = { ILS: '\u20aa', USD: '$', EUR: '\u20ac' };
+  el.currencyBtn.textContent = symbols[displayCurrency];
   await api.setDisplayCurrency(displayCurrency);
   await refreshPortfolioPrices();
 });
@@ -369,12 +381,14 @@ async function loadAndUpdatePortfolio() {
 async function refreshPortfolioPrices() {
   if (portfolio.stocks.length === 0) { updatePortfolioDisplay(); updatePortfolioSummary(); return; }
   try {
-    // Fetch exchange rate + live prices in parallel
-    const [rate, livePrices] = await Promise.all([
+    // Fetch exchange rates + live prices in parallel
+    const [usdRate, eurRate, livePrices] = await Promise.all([
       api.getUsdIlsRate(),
+      api.getEurIlsRate(),
       api.getLivePrices(portfolio.stocks.map(s => s.symbol))
     ]);
-    if (rate) usdIlsRate = rate;
+    if (usdRate) usdIlsRate = usdRate;
+    if (eurRate) eurIlsRate = eurRate;
     applyLivePrices(livePrices);
     lastSuccessfulUpdate = Date.now();
     checkDataFreshness();
@@ -396,15 +410,26 @@ function normalizePrice(price, symbol) {
   return price;
 }
 
-// Convert amount to display currency
-function toDisplayCurrency(amount, fromCurrency) {
-  if (fromCurrency === displayCurrency) return amount;
-  if (fromCurrency === 'USD' && displayCurrency === 'ILS') return amount * usdIlsRate;
-  if (fromCurrency === 'ILS' && displayCurrency === 'USD') return amount / usdIlsRate;
+// Convert any currency to ILS first, then to display currency
+function toILS(amount, fromCurrency) {
+  if (fromCurrency === 'ILS') return amount;
+  if (fromCurrency === 'USD') return amount * usdIlsRate;
+  if (fromCurrency === 'EUR') return amount * eurIlsRate;
   return amount;
 }
 
-function currencySymbol() { return displayCurrency === 'ILS' ? '\u20aa' : '$'; }
+function toDisplayCurrency(amount, fromCurrency) {
+  const inILS = toILS(amount, fromCurrency);
+  if (displayCurrency === 'ILS') return inILS;
+  if (displayCurrency === 'USD') return inILS / usdIlsRate;
+  if (displayCurrency === 'EUR') return inILS / eurIlsRate;
+  return inILS;
+}
+
+function currencySymbol() {
+  const symbols = { ILS: '\u20aa', USD: '$', EUR: '\u20ac' };
+  return symbols[displayCurrency] || '\u20aa';
+}
 
 function applyLivePrices(livePrices) {
   let totalValue = 0, totalCost = 0;
@@ -437,6 +462,14 @@ function applyLivePrices(livePrices) {
     totalValue += stock.displayValue;
     totalCost += stock.displayCost;
   });
+
+  // Add cash balances (ILS + USD + EUR)
+  const cashInDisplay = toDisplayCurrency(cashBalances.ILS || 0, 'ILS')
+                      + toDisplayCurrency(cashBalances.USD || 0, 'USD')
+                      + toDisplayCurrency(cashBalances.EUR || 0, 'EUR');
+  totalValue += cashInDisplay;
+  totalCost += cashInDisplay; // cash doesn't have P&L
+
   const totalPnL = totalValue - totalCost;
   const totalPnLPercent = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0;
   updatePortfolioDisplay();
@@ -486,6 +519,27 @@ function updatePortfolioDisplay() {
       </div>
     `;
     div.querySelector('.stock-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteStock(stock.symbol); });
+    el.stocksList.appendChild(div);
+  });
+
+  // Show cash balances
+  const cashEntries = [
+    { label: 'Cash \u20aa', amount: cashBalances.ILS || 0, currency: 'ILS' },
+    { label: 'Cash $', amount: cashBalances.USD || 0, currency: 'USD' },
+    { label: 'Cash \u20ac', amount: cashBalances.EUR || 0, currency: 'EUR' }
+  ].filter(c => c.amount > 0);
+
+  cashEntries.forEach(c => {
+    const div = document.createElement('div');
+    div.className = 'stock-item';
+    const displayAmt = toDisplayCurrency(c.amount, c.currency);
+    const sym = currencySymbol();
+    div.innerHTML = `
+      <div class="stock-symbol" style="color:rgba(96,165,250,0.9);">${c.label}</div>
+      <div class="stock-shares"></div>
+      <div class="stock-value" style="color:rgba(96,165,250,0.8);">${sym}${Math.round(displayAmt).toLocaleString()}</div>
+      <div class="stock-actions"></div>
+    `;
     el.stocksList.appendChild(div);
   });
 }
@@ -1101,6 +1155,60 @@ async function updateMarketStatus() {
 }
 
 // ============================================================
+// Cash balance management
+// ============================================================
+
+function showCashForm() {
+  if (el.addStockForm.classList.contains('visible')) hideAddStockForm();
+  if (el.reduceStockForm.classList.contains('visible')) hideReduceStockForm();
+
+  el.addStockForm.innerHTML = `
+    <div class="form-title">Cash Balance</div>
+    <div class="form-row">
+      <div class="form-group" style="flex: 1;">
+        <div class="form-label">\u20aa ILS</div>
+        <input type="number" id="cashILS" class="form-input" placeholder="0" min="0" step="0.01" value="${cashBalances.ILS || ''}">
+      </div>
+      <div class="form-group" style="flex: 1;">
+        <div class="form-label">$ USD</div>
+        <input type="number" id="cashUSD" class="form-input" placeholder="0" min="0" step="0.01" value="${cashBalances.USD || ''}">
+      </div>
+      <div class="form-group" style="flex: 1;">
+        <div class="form-label">\u20ac EUR</div>
+        <input type="number" id="cashEUR" class="form-input" placeholder="0" min="0" step="0.01" value="${cashBalances.EUR || ''}">
+      </div>
+    </div>
+    <div class="form-row" style="margin-top: 4px;">
+      <button id="cashSave" class="form-btn">Save</button>
+      <button id="cashCancel" class="form-btn cancel">Cancel</button>
+    </div>
+  `;
+
+  document.getElementById('cashSave').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    cashBalances = {
+      ILS: parseFloat(document.getElementById('cashILS').value) || 0,
+      USD: parseFloat(document.getElementById('cashUSD').value) || 0,
+      EUR: parseFloat(document.getElementById('cashEUR').value) || 0
+    };
+    portfolio.cashBalances = cashBalances;
+    await savePortfolio();
+    hideAddStockForm();
+    await refreshPortfolioPrices();
+  });
+
+  document.getElementById('cashCancel').addEventListener('click', (e) => {
+    e.stopPropagation();
+    hideAddStockForm();
+  });
+
+  el.addStockForm.classList.add('visible');
+  setTimeout(() => resizeWindowToContent(), 100);
+  api.showAddForm();
+  setTimeout(() => document.getElementById('cashILS')?.focus(), 100);
+}
+
+// ============================================================
 // Sparkline chart
 // ============================================================
 
@@ -1357,10 +1465,18 @@ function startAutoUpdate() {
 async function initialize() {
   // Load currency preference + exchange rate
   displayCurrency = await api.getDisplayCurrency() || 'ILS';
-  el.currencyBtn.textContent = displayCurrency === 'ILS' ? '\u20aa' : '$';
-  try { const rate = await api.getUsdIlsRate(); if (rate) usdIlsRate = rate; } catch {}
+  const initSymbols = { ILS: '\u20aa', USD: '$', EUR: '\u20ac' };
+  el.currencyBtn.textContent = initSymbols[displayCurrency] || '\u20aa';
+  try {
+    const [usdR, eurR] = await Promise.all([api.getUsdIlsRate(), api.getEurIlsRate()]);
+    if (usdR) usdIlsRate = usdR;
+    if (eurR) eurIlsRate = eurR;
+  } catch {}
 
   await loadPortfolio();
+
+  // Load cash balances from portfolio
+  cashBalances = portfolio.cashBalances || { ILS: 96, USD: 0 };
 
   // Seed default portfolio if empty (user's Psagot holdings)
   if (portfolio.stocks.length === 0) {
@@ -1369,6 +1485,8 @@ async function initialize() {
       { symbol: 'TCH-F2.TA', shares: 2000, avgPrice: 3353.35, addedDate: '2026-03-26T00:00:00Z' },
       { symbol: 'TCH-F11.TA', shares: 1673, avgPrice: 5677.93, addedDate: '2026-03-26T00:00:00Z' }
     ];
+    portfolio.cashBalances = { ILS: 96, USD: 0 };
+    cashBalances = portfolio.cashBalances;
     await savePortfolio();
     updatePortfolioDisplay();
   }

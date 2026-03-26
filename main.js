@@ -401,6 +401,22 @@ ipcMain.handle('get-usd-ils-rate', async () => {
   }
 });
 
+// Get EUR/ILS exchange rate (cache 60s)
+ipcMain.handle('get-eur-ils-rate', async () => {
+  const cacheKey = 'eur-ils';
+  const cached = getCached(cacheKey, 60_000);
+  if (cached) return cached;
+
+  try {
+    const data = await fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/EURILS%3DX?range=1d&interval=1d');
+    const rate = data.chart?.result?.[0]?.meta?.regularMarketPrice;
+    if (rate) { setCache(cacheKey, rate); return rate; }
+    return getCached(cacheKey, 300_000) || 3.45;
+  } catch {
+    return getCached(cacheKey, 300_000) || 3.45;
+  }
+});
+
 // Currency preference
 ipcMain.handle('get-display-currency', async () => store.get('displayCurrency', 'ILS'));
 ipcMain.handle('set-display-currency', async (_event, currency) => {
