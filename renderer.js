@@ -580,14 +580,16 @@ function updatePortfolioDisplay() {
       </div>
     `;
     div.querySelector('.stock-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteStock(stock.symbol); });
+    // Double-click to edit stock
+    div.addEventListener('dblclick', (e) => { e.stopPropagation(); editStock(stock.symbol); });
     el.stocksList.appendChild(div);
   });
 
   // Show cash balances
   const cashEntries = [
-    { label: 'Cash \u20aa', amount: cashBalances.ILS || 0, currency: 'ILS' },
-    { label: 'Cash $', amount: cashBalances.USD || 0, currency: 'USD' },
-    { label: 'Cash \u20ac', amount: cashBalances.EUR || 0, currency: 'EUR' }
+    { key: 'ILS', label: 'Cash \u20aa', amount: cashBalances.ILS || 0, currency: 'ILS' },
+    { key: 'USD', label: 'Cash $', amount: cashBalances.USD || 0, currency: 'USD' },
+    { key: 'EUR', label: 'Cash \u20ac', amount: cashBalances.EUR || 0, currency: 'EUR' }
   ].filter(c => c.amount > 0);
 
   cashEntries.forEach(c => {
@@ -601,8 +603,134 @@ function updatePortfolioDisplay() {
       <div class="stock-value" style="color:rgba(96,165,250,0.8);">${sym}${Math.round(displayAmt).toLocaleString()}</div>
       <div class="stock-actions"></div>
     `;
+    // Double-click to edit cash
+    div.addEventListener('dblclick', (e) => { e.stopPropagation(); editCash(c.key); });
     el.stocksList.appendChild(div);
   });
+}
+
+// ============================================================
+// Inline editing (double-click)
+// ============================================================
+
+function editStock(symbol) {
+  const stock = portfolio.stocks.find(s => s.symbol === symbol);
+  if (!stock) return;
+
+  const avgP = normalizePrice(stock.avgPrice, symbol);
+
+  el.addStockForm.innerHTML = `
+    <div class="form-title">Edit ${symbol}</div>
+    <div class="form-row">
+      <div class="form-group" style="flex: 0 0 60px;">
+        <div class="form-label">Shares</div>
+        <input type="number" id="editShares" class="form-input" value="${stock.shares}" min="0" step="0.01">
+      </div>
+      <div class="form-group" style="flex: 1;">
+        <div class="form-label">Avg Price</div>
+        <input type="number" id="editAvgPrice" class="form-input" value="${avgP.toFixed(2)}" min="0" step="0.01">
+      </div>
+    </div>
+    <div style="font-size:9px;color:rgba(255,255,255,0.35);padding:2px 0;">Or add more shares at new price:</div>
+    <div class="form-row">
+      <div class="form-group" style="flex: 0 0 60px;">
+        <div class="form-label">+ Add qty</div>
+        <input type="number" id="editAddShares" class="form-input" placeholder="0" min="0" step="0.01">
+      </div>
+      <div class="form-group" style="flex: 1;">
+        <div class="form-label">Buy price</div>
+        <input type="number" id="editAddPrice" class="form-input" placeholder="Auto" min="0" step="0.01">
+      </div>
+    </div>
+    <div class="form-row" style="margin-top: 4px;">
+      <button id="editSave" class="form-btn">Save</button>
+      <button id="editCancel" class="form-btn cancel">Cancel</button>
+    </div>
+  `;
+
+  document.getElementById('editSave').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const newShares = parseFloat(document.getElementById('editShares').value);
+    const newAvg = parseFloat(document.getElementById('editAvgPrice').value);
+    const addQty = parseFloat(document.getElementById('editAddShares').value) || 0;
+    const addPrice = parseFloat(document.getElementById('editAddPrice').value) || 0;
+
+    if (addQty > 0) {
+      // Add more shares at new price → recalculate weighted average
+      let buyPrice = addPrice;
+      if (!buyPrice) {
+        try {
+          const prices = await api.getLivePrices([symbol]);
+          buyPrice = prices[symbol]?.price || 0;
+          if (symbol.endsWith('.TA')) buyPrice /= 100;
+        } catch {}
+      }
+      if (buyPrice > 0) {
+        const totalShares = stock.shares + addQty;
+        const totalCost = (stock.shares * avgP) + (addQty * buyPrice);
+        stock.shares = totalShares;
+        // Store in native format (agorot for .TA)
+        stock.avgPrice = symbol.endsWith('.TA') ? (totalCost / totalShares) * 100 : totalCost / totalShares;
+      }
+    } else {
+      // Direct edit
+      stock.shares = newShares;
+      stock.avgPrice = symbol.endsWith('.TA') ? newAvg * 100 : newAvg;
+    }
+
+    await savePortfolio();
+    hideAddStockForm();
+    await refreshPortfolioPrices();
+  });
+
+  document.getElementById('editCancel').addEventListener('click', (e) => { e.stopPropagation(); hideAddStockForm(); });
+
+  el.addStockForm.classList.add('visible');
+  setTimeout(() => resizeWindowToContent(), 100);
+  api.showAddForm();
+}
+
+function editCash(currency) {
+  const symbols = { ILS: '\u20aa', USD: '$', EUR: '\u20ac' };
+  const sym = symbols[currency] || currency;
+
+  el.addStockForm.innerHTML = `
+    <div class="form-title">Edit Cash ${sym}</div>
+    <div class="form-row">
+      <div class="form-group" style="flex: 1;">
+        <div class="form-label">Current: ${sym}${(cashBalances[currency] || 0).toLocaleString()}</div>
+        <input type="number" id="editCashAmount" class="form-input" value="${cashBalances[currency] || 0}" min="0" step="0.01">
+      </div>
+    </div>
+    <div style="font-size:9px;color:rgba(255,255,255,0.35);padding:2px 0;">Or add to existing:</div>
+    <div class="form-row">
+      <div class="form-group" style="flex: 1;">
+        <div class="form-label">+ Add ${sym}</div>
+        <input type="number" id="editCashAdd" class="form-input" placeholder="0" min="0" step="0.01">
+      </div>
+    </div>
+    <div class="form-row" style="margin-top: 4px;">
+      <button id="cashEditSave" class="form-btn">Save</button>
+      <button id="cashEditCancel" class="form-btn cancel">Cancel</button>
+    </div>
+  `;
+
+  document.getElementById('cashEditSave').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const direct = parseFloat(document.getElementById('editCashAmount').value) || 0;
+    const add = parseFloat(document.getElementById('editCashAdd').value) || 0;
+    cashBalances[currency] = add > 0 ? (cashBalances[currency] || 0) + add : direct;
+    portfolio.cashBalances = cashBalances;
+    await savePortfolio();
+    hideAddStockForm();
+    await refreshPortfolioPrices();
+  });
+
+  document.getElementById('cashEditCancel').addEventListener('click', (e) => { e.stopPropagation(); hideAddStockForm(); });
+
+  el.addStockForm.classList.add('visible');
+  setTimeout(() => resizeWindowToContent(), 100);
+  api.showAddForm();
 }
 
 function updateMarketOverviewLayout() {
