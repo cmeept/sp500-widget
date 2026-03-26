@@ -38,7 +38,8 @@ const el = {
   trendMonth: document.getElementById('trendMonth'),
   trendYear: document.getElementById('trendYear'),
   trendDetail: document.getElementById('trendDetail'),
-  statusDot: document.getElementById('statusDot')
+  statusDot: document.getElementById('statusDot'),
+  currencyBtn: document.getElementById('currencyBtn')
 };
 
 // Dynamic form elements (recreated each time form opens)
@@ -49,6 +50,8 @@ let isExpanded = false;
 let currentTrendMode = 'sp500';
 let sparklineMode = '1D'; // '1D' or '1W'
 let activeTrendDetail = null; // 'week' | 'month' | 'year' | 'multiyear' | null
+let displayCurrency = 'ILS'; // 'ILS' or 'USD'
+let usdIlsRate = 3.12; // updated live
 let detailCollapsedY = null; // saved Y position before detail opened
 let lastSuccessfulUpdate = 0;
 
@@ -94,6 +97,15 @@ el.reduceStockSymbol.addEventListener('change', (e) => {
     const stock = portfolio.stocks.find(s => s.symbol === sym);
     if (stock) { el.currentShares.value = stock.shares; el.sellShares.max = stock.shares; el.sellShares.focus(); }
   } else { el.currentShares.value = ''; el.sellShares.max = ''; }
+});
+
+el.currencyBtn.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  displayCurrency = displayCurrency === 'ILS' ? 'USD' : 'ILS';
+  el.currencyBtn.textContent = displayCurrency === 'ILS' ? '\u20aa' : '$';
+  el.currencyBtn.title = `Switch to ${displayCurrency === 'ILS' ? 'USD' : 'ILS'}`;
+  await api.setDisplayCurrency(displayCurrency);
+  await refreshPortfolioPrices();
 });
 
 el.sparklineToggle.addEventListener('click', (e) => {
@@ -357,7 +369,12 @@ async function loadAndUpdatePortfolio() {
 async function refreshPortfolioPrices() {
   if (portfolio.stocks.length === 0) { updatePortfolioDisplay(); updatePortfolioSummary(); return; }
   try {
-    const livePrices = await api.getLivePrices(portfolio.stocks.map(s => s.symbol));
+    // Fetch exchange rate + live prices in parallel
+    const [rate, livePrices] = await Promise.all([
+      api.getUsdIlsRate(),
+      api.getLivePrices(portfolio.stocks.map(s => s.symbol))
+    ]);
+    if (rate) usdIlsRate = rate;
     applyLivePrices(livePrices);
     lastSuccessfulUpdate = Date.now();
     checkDataFreshness();
@@ -367,23 +384,58 @@ async function refreshPortfolioPrices() {
   }
 }
 
+// Detect stock's native currency from symbol
+function getStockCurrency(symbol) {
+  if (symbol.endsWith('.TA')) return 'ILS';
+  return 'USD';
+}
+
+// TASE (.TA) prices from Yahoo are in Agorot (1/100 shekel). Convert to shekel.
+function normalizePrice(price, symbol) {
+  if (symbol.endsWith('.TA')) return price / 100;
+  return price;
+}
+
+// Convert amount to display currency
+function toDisplayCurrency(amount, fromCurrency) {
+  if (fromCurrency === displayCurrency) return amount;
+  if (fromCurrency === 'USD' && displayCurrency === 'ILS') return amount * usdIlsRate;
+  if (fromCurrency === 'ILS' && displayCurrency === 'USD') return amount / usdIlsRate;
+  return amount;
+}
+
+function currencySymbol() { return displayCurrency === 'ILS' ? '\u20aa' : '$'; }
+
 function applyLivePrices(livePrices) {
   let totalValue = 0, totalCost = 0;
   portfolio.stocks.forEach(stock => {
     const live = livePrices[stock.symbol];
+    const nativeCurrency = getStockCurrency(stock.symbol);
+
     if (live?.price) {
-      stock.currentPrice = live.price;
-      stock.currentValue = stock.shares * live.price;
-      stock.unrealizedPnL = stock.currentValue - (stock.shares * stock.avgPrice);
-      stock.unrealizedPnLPercent = (stock.unrealizedPnL / (stock.shares * stock.avgPrice)) * 100;
+      const price = normalizePrice(live.price, stock.symbol);
+      const avgP = normalizePrice(stock.avgPrice, stock.symbol);
+      stock.currentPrice = price;
+      // Native currency values (in shekels for .TA, dollars for US)
+      stock.nativeValue = stock.shares * price;
+      stock.nativeCost = stock.shares * avgP;
+      stock.unrealizedPnL = stock.nativeValue - stock.nativeCost;
+      stock.unrealizedPnLPercent = stock.nativeCost > 0 ? (stock.unrealizedPnL / stock.nativeCost) * 100 : 0;
+      // Convert to display currency for totals
+      stock.displayValue = toDisplayCurrency(stock.nativeValue, nativeCurrency);
+      stock.displayCost = toDisplayCurrency(stock.nativeCost, nativeCurrency);
     } else {
-      stock.currentPrice = stock.avgPrice;
-      stock.currentValue = stock.shares * stock.avgPrice;
+      const avgP = normalizePrice(stock.avgPrice, stock.symbol);
+      stock.currentPrice = avgP;
+      stock.nativeValue = stock.shares * avgP;
+      stock.nativeCost = stock.nativeValue;
       stock.unrealizedPnL = 0;
       stock.unrealizedPnLPercent = 0;
+      stock.displayValue = toDisplayCurrency(stock.nativeValue, nativeCurrency);
+      stock.displayCost = stock.displayValue;
     }
-    totalValue += stock.currentValue;
-    totalCost += stock.shares * stock.avgPrice;
+    totalValue += stock.displayValue;
+    totalCost += stock.displayCost;
   });
   const totalPnL = totalValue - totalCost;
   const totalPnLPercent = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0;
@@ -396,10 +448,11 @@ function applyLivePrices(livePrices) {
 // ============================================================
 
 function updatePortfolioSummary(totalValue = 0, totalPnL = 0, totalPnLPercent = 0) {
-  el.portfolioTotal.textContent = `$${Math.round(totalValue)}`;
+  const sym = currencySymbol();
+  el.portfolioTotal.textContent = `${sym}${Math.round(totalValue).toLocaleString()}`;
   const cls = totalPnL >= 0 ? 'positive' : 'negative';
   const sign = totalPnL >= 0 ? '+' : '';
-  el.portfolioPnL.innerHTML = `<span class="${cls}">${sign}$${Math.round(totalPnL)} (${sign}${totalPnLPercent.toFixed(2)}%)</span>`;
+  el.portfolioPnL.innerHTML = `<span class="${cls}">${sign}${sym}${Math.round(Math.abs(totalPnL)).toLocaleString()} (${sign}${totalPnLPercent.toFixed(2)}%)</span>`;
   updateMarketOverviewLayout();
 }
 
@@ -418,13 +471,14 @@ function updatePortfolioDisplay() {
     div.className = 'stock-item';
     const pnlClass = (stock.unrealizedPnL || 0) >= 0 ? 'positive' : 'negative';
     const pnlSign = (stock.unrealizedPnL || 0) >= 0 ? '+' : '';
-    const displayValue = stock.currentValue || (stock.shares * stock.avgPrice);
+    const value = stock.displayValue || toDisplayCurrency(stock.shares * normalizePrice(stock.avgPrice, stock.symbol), getStockCurrency(stock.symbol));
+    const sym = currencySymbol();
 
     div.innerHTML = `
       <div class="stock-symbol">${stock.symbol}</div>
       <div class="stock-shares">${stock.shares}</div>
       <div class="stock-value ${pnlClass}">
-        ${displayValue.toFixed(0)}
+        ${sym}${Math.round(value).toLocaleString()}
         <div style="font-size:9px;">${pnlSign}${(stock.unrealizedPnLPercent || 0).toFixed(1)}%</div>
       </div>
       <div class="stock-actions">
@@ -1301,7 +1355,24 @@ function startAutoUpdate() {
 // ============================================================
 
 async function initialize() {
+  // Load currency preference + exchange rate
+  displayCurrency = await api.getDisplayCurrency() || 'ILS';
+  el.currencyBtn.textContent = displayCurrency === 'ILS' ? '\u20aa' : '$';
+  try { const rate = await api.getUsdIlsRate(); if (rate) usdIlsRate = rate; } catch {}
+
   await loadPortfolio();
+
+  // Seed default portfolio if empty (user's Psagot holdings)
+  if (portfolio.stocks.length === 0) {
+    portfolio.stocks = [
+      { symbol: 'SPY', shares: 9, avgPrice: 691.99, addedDate: '2026-03-26T00:00:00Z' },
+      { symbol: 'TCH-F2.TA', shares: 2000, avgPrice: 3353.35, addedDate: '2026-03-26T00:00:00Z' },
+      { symbol: 'TCH-F11.TA', shares: 1673, avgPrice: 5677.93, addedDate: '2026-03-26T00:00:00Z' }
+    ];
+    await savePortfolio();
+    updatePortfolioDisplay();
+  }
+
   if (portfolio.stocks.length > 0) await refreshPortfolioPrices();
   if (!isExpanded) {
     currentTrendMode = 'sp500';

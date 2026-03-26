@@ -17,6 +17,7 @@ const store = new Store({
     collapsedPosition: null,
     expandedPosition: null,
     portfolio: { stocks: [], lastUpdated: null },
+    displayCurrency: 'ILS',
     migrated: false
   }
 });
@@ -379,6 +380,32 @@ ipcMain.handle('get-chart-history', async (_event, symbol) => {
   } catch {
     return getCached(cacheKey, 600_000) || null; // stale cache up to 10 min
   }
+});
+
+// Get USD/ILS exchange rate (cache 60s)
+ipcMain.handle('get-usd-ils-rate', async () => {
+  const cacheKey = 'usd-ils';
+  const cached = getCached(cacheKey, 60_000);
+  if (cached) return cached;
+
+  try {
+    const data = await fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/ILS%3DX?range=1d&interval=1d');
+    const rate = data.chart?.result?.[0]?.meta?.regularMarketPrice;
+    if (rate) {
+      setCache(cacheKey, rate);
+      return rate;
+    }
+    return getCached(cacheKey, 300_000) || 3.12;
+  } catch {
+    return getCached(cacheKey, 300_000) || 3.12;
+  }
+});
+
+// Currency preference
+ipcMain.handle('get-display-currency', async () => store.get('displayCurrency', 'ILS'));
+ipcMain.handle('set-display-currency', async (_event, currency) => {
+  store.set('displayCurrency', currency);
+  return true;
 });
 
 // Get 15-year monthly history for multi-year view (cache 30 min)

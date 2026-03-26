@@ -165,6 +165,18 @@ html, body {
   transform: scale(0.95);
 }
 
+.currency-btn {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.currency-btn:hover {
+  background: rgba(251, 191, 36, 0.8);
+  color: white;
+  border-color: rgba(251, 191, 36, 0.9);
+  transform: scale(1.05);
+}
+
 .expand-btn:hover {
   background: rgba(74, 222, 128, 0.8);
   color: white;
