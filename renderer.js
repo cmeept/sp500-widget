@@ -1476,19 +1476,11 @@ async function initialize() {
   await loadPortfolio();
 
   // Load cash balances from portfolio
-  cashBalances = portfolio.cashBalances || { ILS: 96, USD: 0 };
+  cashBalances = portfolio.cashBalances || { ILS: 0, USD: 0, EUR: 0 };
 
-  // Seed default portfolio if empty (user's Psagot holdings)
-  if (portfolio.stocks.length === 0) {
-    portfolio.stocks = [
-      { symbol: 'SPY', shares: 9, avgPrice: 691.99, addedDate: '2026-03-26T00:00:00Z' },
-      { symbol: 'TCH-F2.TA', shares: 2000, avgPrice: 3353.35, addedDate: '2026-03-26T00:00:00Z' },
-      { symbol: 'TCH-F11.TA', shares: 1673, avgPrice: 5677.93, addedDate: '2026-03-26T00:00:00Z' }
-    ];
-    portfolio.cashBalances = { ILS: 96, USD: 0 };
-    cashBalances = portfolio.cashBalances;
-    await savePortfolio();
-    updatePortfolioDisplay();
+  // Load cash balances default
+  if (!portfolio.cashBalances) {
+    portfolio.cashBalances = { ILS: 0, USD: 0, EUR: 0 };
   }
 
   if (portfolio.stocks.length > 0) await refreshPortfolioPrices();
