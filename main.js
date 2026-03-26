@@ -417,6 +417,14 @@ ipcMain.handle('get-eur-ils-rate', async () => {
   }
 });
 
+// TASE catalog for search
+ipcMain.handle('get-tase-catalog', async () => {
+  try {
+    const catalogPath = path.join(__dirname, 'securities-catalog.json');
+    return JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+  } catch { return []; }
+});
+
 // Currency preference
 ipcMain.handle('get-display-currency', async () => store.get('displayCurrency', 'ILS'));
 ipcMain.handle('set-display-currency', async (_event, currency) => {

@@ -40,6 +40,7 @@
       "preload.js",
       "renderer.js",
       "styles.css",
+      "securities-catalog.json",
       "index.html",
       "package.json",
       "icons/**/*"

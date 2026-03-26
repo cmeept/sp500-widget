@@ -202,29 +202,44 @@ function resizeWindowToContent() {
 // Add Stock Form
 // ============================================================
 
-function showAddStockForm() {
+async function showAddStockForm() {
   if (el.reduceStockForm.classList.contains('visible')) hideReduceStockForm();
-  recreateAddStockForm();
+  await recreateAddStockForm();
   el.addStockForm.classList.add('visible');
   setTimeout(() => { if (formEls.stockSymbol) { formEls.stockSymbol.focus(); formEls.stockSymbol.select(); } }, 100);
   setTimeout(() => resizeWindowToContent(), 100);
   api.showAddForm();
 }
 
-function recreateAddStockForm() {
+let securitiesCatalog = [];
+
+async function recreateAddStockForm() {
+  // Load catalog if not loaded
+  if (securitiesCatalog.length === 0) {
+    try { securitiesCatalog = await api.getTaseCatalog() || []; } catch {}
+  }
+
   el.addStockForm.innerHTML = `
     <div class="form-title">Add Stock to Portfolio</div>
     <div class="form-row">
-      <div class="form-group" style="flex: 0 0 60px;">
-        <div class="form-label">Symbol</div>
-        <input type="text" id="stockSymbol" class="form-input" placeholder="AAPL" maxlength="6">
+      <div class="form-group" style="flex: 1; position: relative;">
+        <div class="form-label">Search or enter ticker</div>
+        <input type="text" id="stockSearch" class="form-input" placeholder="S&P 500, NASDAQ, Gold..." style="text-align:left;">
+        <div id="searchResults" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:150px;overflow-y:auto;background:rgba(15,15,35,0.98);border:1px solid rgba(255,255,255,0.2);border-radius:6px;z-index:100;margin-top:2px;"></div>
+      </div>
+    </div>
+    <div id="selectedTicker" style="display:none;font-size:10px;color:#4ade80;font-weight:600;padding:2px 0;"></div>
+    <div class="form-row">
+      <div class="form-group" style="flex: 0 0 80px;">
+        <div class="form-label">Ticker</div>
+        <input type="text" id="stockSymbol" class="form-input" placeholder="SPY" maxlength="20">
       </div>
       <div class="form-group" style="flex: 0 0 50px;">
         <div class="form-label">Qty</div>
         <input type="number" id="stockShares" class="form-input" placeholder="10" min="0" step="0.01">
       </div>
       <div class="form-group" style="flex: 1;">
-        <div class="form-label">Price $</div>
+        <div class="form-label">Price</div>
         <input type="number" id="stockPrice" class="form-input" placeholder="Auto" min="0" step="0.01">
       </div>
     </div>
@@ -233,13 +248,59 @@ function recreateAddStockForm() {
       <button id="addStockCancel" class="form-btn cancel">Cancel</button>
     </div>
   `;
+
   formEls.stockSymbol = document.getElementById('stockSymbol');
   formEls.stockShares = document.getElementById('stockShares');
   formEls.stockPrice = document.getElementById('stockPrice');
+  const searchInput = document.getElementById('stockSearch');
+  const searchResults = document.getElementById('searchResults');
+  const selectedTicker = document.getElementById('selectedTicker');
+
+  // Search logic
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (q.length < 1) { searchResults.style.display = 'none'; return; }
+
+    const matches = securitiesCatalog.filter(s =>
+      s.n.toLowerCase().includes(q) || s.t.toLowerCase().includes(q) || s.c.toLowerCase().includes(q)
+    ).slice(0, 15);
+
+    if (matches.length === 0) {
+      searchResults.style.display = 'none';
+      return;
+    }
+
+    searchResults.innerHTML = matches.map(s => `
+      <div class="search-result-item" data-ticker="${s.t}" style="padding:4px 8px;cursor:pointer;font-size:10px;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between;">
+        <span style="color:white;font-weight:600;">${s.n}</span>
+        <span style="color:rgba(255,255,255,0.4);font-size:9px;">${s.t}</span>
+      </div>
+    `).join('');
+    searchResults.style.display = 'block';
+
+    searchResults.querySelectorAll('.search-result-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const ticker = item.dataset.ticker;
+        const name = item.querySelector('span').textContent;
+        formEls.stockSymbol.value = ticker;
+        selectedTicker.textContent = `${name} (${ticker})`;
+        selectedTicker.style.display = 'block';
+        searchResults.style.display = 'none';
+        searchInput.value = '';
+        formEls.stockShares.focus();
+      });
+      item.addEventListener('mouseenter', () => { item.style.background = 'rgba(74,222,128,0.15)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+    });
+  });
+
+  // Hide results on blur
+  searchInput.addEventListener('blur', () => { setTimeout(() => { searchResults.style.display = 'none'; }, 200); });
+
   document.getElementById('addStockSubmit').addEventListener('click', (e) => { e.stopPropagation(); addStock(); });
   document.getElementById('addStockCancel').addEventListener('click', (e) => { e.stopPropagation(); hideAddStockForm(); });
 
-  // Tab navigation between fields
+  // Tab navigation
   formEls.stockSymbol.addEventListener('keydown', (e) => { if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); formEls.stockShares.focus(); } });
   formEls.stockShares.addEventListener('keydown', (e) => {
     if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); formEls.stockPrice.focus(); }

@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getChartHistory: (symbol) => ipcRenderer.invoke('get-chart-history', symbol),
   getLongHistory: (symbol) => ipcRenderer.invoke('get-long-history', symbol),
   getLivePrices: (symbols) => ipcRenderer.invoke('get-live-prices', symbols),
+  getTaseCatalog: () => ipcRenderer.invoke('get-tase-catalog'),
   getUsdIlsRate: () => ipcRenderer.invoke('get-usd-ils-rate'),
   getEurIlsRate: () => ipcRenderer.invoke('get-eur-ils-rate'),
   getDisplayCurrency: () => ipcRenderer.invoke('get-display-currency'),
