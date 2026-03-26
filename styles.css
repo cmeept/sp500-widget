@@ -606,6 +606,8 @@ html, body {
   border-radius: 6px;
   font-size: 11px;
   transition: all 0.2s ease;
+  -webkit-app-region: no-drag;
+  cursor: pointer;
 }
 
 .stock-item:hover {
