@@ -48,7 +48,7 @@ let formEls = {};
 let portfolio = { stocks: [], lastUpdated: null };
 let isExpanded = false;
 let currentTrendMode = 'sp500';
-let sparklineMode = '1D'; // '1D' or '1W'
+let sparklineMode = '1D'; // '1D', '1W', 'MY1D', 'MY1W'
 let activeTrendDetail = null; // 'week' | 'month' | 'year' | 'multiyear' | null
 let displayCurrency = 'ILS'; // 'ILS' or 'USD'
 let usdIlsRate = 3.12; // updated live
@@ -120,10 +120,14 @@ el.currencyBtn.addEventListener('click', async (e) => {
   await refreshPortfolioPrices();
 });
 
+const sparklineModes = ['1D', '1W', 'MY1D', 'MY1W'];
+const sparklineLabels = { '1D': 'S&P 1D', '1W': 'S&P 1W', 'MY1D': 'My 1D', 'MY1W': 'My 1W' };
+
 el.sparklineToggle.addEventListener('click', (e) => {
   e.stopPropagation();
-  sparklineMode = sparklineMode === '1D' ? '1W' : '1D';
-  el.sparklineToggle.textContent = sparklineMode;
+  const idx = sparklineModes.indexOf(sparklineMode);
+  sparklineMode = sparklineModes[(idx + 1) % sparklineModes.length];
+  el.sparklineToggle.textContent = sparklineLabels[sparklineMode];
   updateSparkline();
 });
 
@@ -240,7 +244,7 @@ async function recreateAddStockForm() {
       </div>
       <div class="form-group" style="flex: 1;">
         <div class="form-label">Price</div>
-        <input type="number" id="stockPrice" class="form-input" placeholder="Auto" min="0" step="0.01">
+        <input type="number" id="stockPrice" class="form-input" placeholder="Auto" min="0" step="0.000001">
       </div>
     </div>
     <div class="form-row" style="margin-top: 4px;">
@@ -576,12 +580,12 @@ function updatePortfolioDisplay() {
         <div style="font-size:9px;">${pnlSign}${(stock.unrealizedPnLPercent || 0).toFixed(1)}%</div>
       </div>
       <div class="stock-actions">
+        <div class="stock-edit" title="Edit stock">\u270e</div>
         <div class="stock-delete" title="Delete stock">\u00d7</div>
       </div>
     `;
+    div.querySelector('.stock-edit').addEventListener('click', (e) => { e.stopPropagation(); editStock(stock.symbol); });
     div.querySelector('.stock-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteStock(stock.symbol); });
-    // Double-click to edit stock
-    div.addEventListener('dblclick', (e) => { e.stopPropagation(); editStock(stock.symbol); });
     el.stocksList.appendChild(div);
   });
 
@@ -601,10 +605,11 @@ function updatePortfolioDisplay() {
       <div class="stock-symbol" style="color:rgba(96,165,250,0.9);">${c.label}</div>
       <div class="stock-shares"></div>
       <div class="stock-value" style="color:rgba(96,165,250,0.8);">${sym}${Math.round(displayAmt).toLocaleString()}</div>
-      <div class="stock-actions"></div>
+      <div class="stock-actions">
+        <div class="stock-edit" title="Edit cash">\u270e</div>
+      </div>
     `;
-    // Double-click to edit cash
-    div.addEventListener('dblclick', (e) => { e.stopPropagation(); editCash(c.key); });
+    div.querySelector('.stock-edit').addEventListener('click', (e) => { e.stopPropagation(); editCash(c.key); });
     el.stocksList.appendChild(div);
   });
 }
@@ -628,7 +633,7 @@ function editStock(symbol) {
       </div>
       <div class="form-group" style="flex: 1;">
         <div class="form-label">Avg Price</div>
-        <input type="number" id="editAvgPrice" class="form-input" value="${avgP.toFixed(2)}" min="0" step="0.01">
+        <input type="number" id="editAvgPrice" class="form-input" value="${avgP.toFixed(6)}" min="0" step="0.000001">
       </div>
     </div>
     <div style="font-size:9px;color:rgba(255,255,255,0.35);padding:2px 0;">Or add more shares at new price:</div>
@@ -1403,7 +1408,16 @@ function showCashForm() {
 
 async function updateSparkline() {
   try {
-    const data = await api.getSparklineData(sparklineMode);
+    let data;
+    if (sparklineMode === 'MY1D' || sparklineMode === 'MY1W') {
+      // Portfolio sparkline
+      if (portfolio.stocks.length === 0) return;
+      const holdings = portfolio.stocks.map(s => ({ symbol: s.symbol, shares: s.shares }));
+      data = await api.getPortfolioSparkline(holdings, sparklineMode);
+    } else {
+      // S&P 500 sparkline
+      data = await api.getSparklineData(sparklineMode === '1W' ? '1W' : '1D');
+    }
     if (!data?.points || data.points.length < 2) return;
     drawSparkline(data.points, data.previousClose);
   } catch { /* silent */ }

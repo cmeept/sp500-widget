@@ -358,6 +358,79 @@ ipcMain.handle('get-sparkline-data', async (_event, mode) => {
   }
 });
 
+// Get portfolio sparkline — combine multiple symbols (cache 30s)
+ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
+  const cacheKey = `port-spark-${mode}`;
+  const cached = getCached(cacheKey, 30_000);
+  if (cached) return cached;
+
+  try {
+    const params = mode === 'MY1W' ? 'range=5d&interval=5m' : 'range=1d&interval=2m';
+
+    // Fetch all holdings in parallel
+    const results = await Promise.allSettled(
+      holdings.map(async (h) => {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(h.symbol)}?${params}`;
+        const data = await fetchWithRetry(url, 1, 500);
+        const result = data.chart?.result?.[0];
+        if (!result) return null;
+        return {
+          symbol: h.symbol,
+          shares: h.shares,
+          timestamps: result.timestamp || [],
+          closes: result.indicators?.quote?.[0]?.close || [],
+          previousClose: result.meta?.previousClose || result.meta?.chartPreviousClose || 0
+        };
+      })
+    );
+
+    const stocks = results
+      .filter(r => r.status === 'fulfilled' && r.value)
+      .map(r => r.value);
+
+    if (stocks.length === 0) return null;
+
+    // Use the stock with most data points as the time axis
+    const primary = stocks.reduce((a, b) => a.timestamps.length > b.timestamps.length ? a : b);
+    const points = [];
+    let prevTotal = 0;
+
+    // Calculate previous close total
+    for (const s of stocks) {
+      const price = s.previousClose || 0;
+      const isTA = s.symbol.endsWith('.TA');
+      prevTotal += s.shares * (isTA ? price / 100 : price);
+    }
+
+    for (let i = 0; i < primary.timestamps.length; i++) {
+      const t = primary.timestamps[i];
+      let total = 0;
+
+      for (const s of stocks) {
+        // Find closest timestamp in this stock's data
+        let closeIdx = 0;
+        for (let j = 0; j < s.timestamps.length; j++) {
+          if (s.timestamps[j] <= t) closeIdx = j;
+          else break;
+        }
+        const price = s.closes[closeIdx];
+        if (price && price > 0) {
+          const isTA = s.symbol.endsWith('.TA');
+          total += s.shares * (isTA ? price / 100 : price);
+        }
+      }
+
+      if (total > 0) points.push({ t, p: total });
+    }
+
+    const payload = { points, previousClose: prevTotal, fetchedAt: Date.now() };
+    setCache(cacheKey, payload);
+    return payload;
+  } catch {
+    return getCached(cacheKey, 120_000) || null;
+  }
+});
+
 // Get 1-year historical data for a symbol (cache 5 min)
 ipcMain.handle('get-chart-history', async (_event, symbol) => {
   const cacheKey = `history-${symbol}`;
