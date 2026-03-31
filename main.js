@@ -358,7 +358,7 @@ ipcMain.handle('get-sparkline-data', async (_event, mode) => {
   }
 });
 
-// Get portfolio sparkline — combine multiple symbols (cache 30s)
+// Get portfolio sparkline — combine multiple symbols, all in ILS (cache 30s)
 ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
   const cacheKey = `port-spark-${mode}`;
   const cached = getCached(cacheKey, 30_000);
@@ -366,6 +366,13 @@ ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
 
   try {
     const params = mode === 'MY1W' ? 'range=5d&interval=5m' : 'range=1d&interval=2m';
+
+    // Get USD/ILS rate for conversion
+    let usdIls = 3.12;
+    try {
+      const fxData = await fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/ILS%3DX?range=1d&interval=1d');
+      usdIls = fxData.chart?.result?.[0]?.meta?.regularMarketPrice || 3.12;
+    } catch {}
 
     // Fetch all holdings in parallel
     const results = await Promise.allSettled(
@@ -390,36 +397,44 @@ ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
 
     if (stocks.length === 0) return null;
 
-    // Use the stock with most data points as the time axis
-    const primary = stocks.reduce((a, b) => a.timestamps.length > b.timestamps.length ? a : b);
-    const points = [];
-    let prevTotal = 0;
-
-    // Calculate previous close total
-    for (const s of stocks) {
-      const price = s.previousClose || 0;
-      const isTA = s.symbol.endsWith('.TA');
-      prevTotal += s.shares * (isTA ? price / 100 : price);
+    // Convert price to ILS
+    function toILS(price, symbol) {
+      if (!price || price <= 0) return 0;
+      const isTA = symbol.endsWith('.TA');
+      const priceNorm = isTA ? price / 100 : price; // agorot → shekel
+      return isTA ? priceNorm : priceNorm * usdIls; // USD → ILS
     }
 
-    for (let i = 0; i < primary.timestamps.length; i++) {
-      const t = primary.timestamps[i];
-      let total = 0;
+    // Merge all timestamps into sorted unique timeline
+    const allTimes = new Set();
+    for (const s of stocks) {
+      for (const t of s.timestamps) allTimes.add(t);
+    }
+    const timeline = [...allTimes].sort((a, b) => a - b);
 
+    // Calculate previous close total in ILS
+    let prevTotal = 0;
+    for (const s of stocks) {
+      prevTotal += s.shares * toILS(s.previousClose, s.symbol);
+    }
+
+    // Build portfolio value at each time point
+    const points = [];
+    const lastPrice = {}; // track last known price per symbol
+
+    for (const t of timeline) {
+      let total = 0;
       for (const s of stocks) {
-        // Find closest timestamp in this stock's data
-        let closeIdx = 0;
+        // Find closest price at or before this timestamp
         for (let j = 0; j < s.timestamps.length; j++) {
-          if (s.timestamps[j] <= t) closeIdx = j;
-          else break;
+          if (s.timestamps[j] <= t && s.closes[j] != null && s.closes[j] > 0) {
+            lastPrice[s.symbol] = s.closes[j];
+          }
         }
-        const price = s.closes[closeIdx];
-        if (price && price > 0) {
-          const isTA = s.symbol.endsWith('.TA');
-          total += s.shares * (isTA ? price / 100 : price);
+        if (lastPrice[s.symbol]) {
+          total += s.shares * toILS(lastPrice[s.symbol], s.symbol);
         }
       }
-
       if (total > 0) points.push({ t, p: total });
     }
 

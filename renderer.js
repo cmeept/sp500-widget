@@ -497,7 +497,7 @@ function currencySymbol() {
 }
 
 function applyLivePrices(livePrices) {
-  let totalValue = 0, totalCost = 0;
+  let totalValue = 0, totalCost = 0, totalDayPnL = 0, totalPrevClose = 0;
   portfolio.stocks.forEach(stock => {
     const live = livePrices[stock.symbol];
     const nativeCurrency = getStockCurrency(stock.symbol);
@@ -511,6 +511,16 @@ function applyLivePrices(livePrices) {
       stock.nativeCost = stock.shares * avgP;
       stock.unrealizedPnL = stock.nativeValue - stock.nativeCost;
       stock.unrealizedPnLPercent = stock.nativeCost > 0 ? (stock.unrealizedPnL / stock.nativeCost) * 100 : 0;
+
+      // Daily P&L (from previous close)
+      try {
+        const prevClose = (live.change != null && live.change !== 0) ? (live.price - live.change) : live.price;
+        const prevCloseNorm = normalizePrice(prevClose, stock.symbol);
+        const dayPnLNative = stock.shares * (price - prevCloseNorm);
+        stock.dayPnL = toDisplayCurrency(dayPnLNative, nativeCurrency);
+        totalDayPnL += stock.dayPnL;
+        totalPrevClose += toDisplayCurrency(stock.shares * prevCloseNorm, nativeCurrency);
+      } catch { stock.dayPnL = 0; }
       // Convert to display currency for totals
       stock.displayValue = toDisplayCurrency(stock.nativeValue, nativeCurrency);
       stock.displayCost = toDisplayCurrency(stock.nativeCost, nativeCurrency);
@@ -521,6 +531,7 @@ function applyLivePrices(livePrices) {
       stock.nativeCost = stock.nativeValue;
       stock.unrealizedPnL = 0;
       stock.unrealizedPnLPercent = 0;
+      stock.dayPnL = 0;
       stock.displayValue = toDisplayCurrency(stock.nativeValue, nativeCurrency);
       stock.displayCost = stock.displayValue;
     }
@@ -537,20 +548,28 @@ function applyLivePrices(livePrices) {
 
   const totalPnL = totalValue - totalCost;
   const totalPnLPercent = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0;
+  const dayPnLPercent = totalPrevClose > 0 ? (totalDayPnL / totalPrevClose) * 100 : 0;
   updatePortfolioDisplay();
-  updatePortfolioSummary(totalValue, totalPnL, totalPnLPercent);
+  updatePortfolioSummary(totalValue, totalPnL, totalPnLPercent, totalDayPnL, dayPnLPercent);
 }
 
 // ============================================================
 // Portfolio display
 // ============================================================
 
-function updatePortfolioSummary(totalValue = 0, totalPnL = 0, totalPnLPercent = 0) {
+function updatePortfolioSummary(totalValue = 0, totalPnL = 0, totalPnLPercent = 0, dayPnL = 0, dayPnLPercent = 0) {
   const sym = currencySymbol();
   el.portfolioTotal.textContent = `${sym}${Math.round(totalValue).toLocaleString()}`;
-  const cls = totalPnL >= 0 ? 'positive' : 'negative';
-  const sign = totalPnL >= 0 ? '+' : '';
-  el.portfolioPnL.innerHTML = `<span class="${cls}">${sign}${sym}${Math.round(Math.abs(totalPnL)).toLocaleString()} (${sign}${totalPnLPercent.toFixed(2)}%)</span>`;
+
+  const dayCls = dayPnL >= 0 ? 'positive' : 'negative';
+  const daySign = dayPnL >= 0 ? '+' : '';
+  const totCls = totalPnL >= 0 ? 'positive' : 'negative';
+  const totSign = totalPnL >= 0 ? '+' : '';
+
+  el.portfolioPnL.innerHTML =
+    '<span class="' + dayCls + '" style="font-size:10px;">' + daySign + sym + Math.round(Math.abs(dayPnL)).toLocaleString() + ' (' + daySign + (dayPnLPercent || 0).toFixed(2) + '%)</span>' +
+    '<br>' +
+    '<span class="' + totCls + '" style="font-size:9px;opacity:0.7;">Total: ' + totSign + sym + Math.round(Math.abs(totalPnL)).toLocaleString() + ' (' + totSign + (totalPnLPercent || 0).toFixed(2) + '%)</span>';
   updateMarketOverviewLayout();
 }
 
