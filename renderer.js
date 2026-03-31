@@ -567,9 +567,9 @@ function updatePortfolioSummary(totalValue = 0, totalPnL = 0, totalPnLPercent = 
   const totSign = totalPnL >= 0 ? '+' : '';
 
   el.portfolioPnL.innerHTML =
-    '<span class="' + dayCls + '" style="font-size:10px;">' + daySign + sym + Math.round(Math.abs(dayPnL)).toLocaleString() + ' (' + daySign + (dayPnLPercent || 0).toFixed(2) + '%)</span>' +
+    '<span class="' + dayCls + '" style="font-size:12px;font-weight:600;">' + daySign + sym + Math.round(Math.abs(dayPnL)).toLocaleString() + ' (' + daySign + (dayPnLPercent || 0).toFixed(2) + '%)</span>' +
     '<br>' +
-    '<span class="' + totCls + '" style="font-size:9px;opacity:0.7;">Total: ' + totSign + sym + Math.round(Math.abs(totalPnL)).toLocaleString() + ' (' + totSign + (totalPnLPercent || 0).toFixed(2) + '%)</span>';
+    '<span class="' + totCls + '" style="font-size:11px;font-weight:500;opacity:0.7;">' + totSign + sym + Math.round(Math.abs(totalPnL)).toLocaleString() + ' (' + totSign + (totalPnLPercent || 0).toFixed(2) + '%)</span>';
   updateMarketOverviewLayout();
 }
 

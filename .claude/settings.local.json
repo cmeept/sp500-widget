@@ -46,7 +46,9 @@
       "Bash(npx electron:*)",
       "Bash(node -c main.js)",
       "Bash(node -c renderer.js)",
-      "Bash(node -c preload.js)"
+      "Bash(node -c preload.js)",
+      "Bash(node -e \":*)",
+      "Bash(node -e \"require\\(''''./main.js''''\\)\")"
     ],
     "deny": []
   }
