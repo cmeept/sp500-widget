@@ -367,7 +367,7 @@ ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
   try {
     const params = mode === 'MY1W' ? 'range=5d&interval=5m' : 'range=1d&interval=2m';
 
-    // Get USD/ILS rate for conversion
+    // Get USD/ILS rate
     let usdIls = 3.12;
     try {
       const fxData = await fetchWithRetry('https://query1.finance.yahoo.com/v8/finance/chart/ILS%3DX?range=1d&interval=1d');
@@ -381,59 +381,76 @@ ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
         const data = await fetchWithRetry(url, 1, 500);
         const result = data.chart?.result?.[0];
         if (!result) return null;
+
+        // Filter: only keep non-null data points
+        const rawTs = result.timestamp || [];
+        const rawCloses = result.indicators?.quote?.[0]?.close || [];
+        const timestamps = [];
+        const closes = [];
+        for (let i = 0; i < rawTs.length; i++) {
+          if (rawCloses[i] != null && rawCloses[i] > 0) {
+            timestamps.push(rawTs[i]);
+            closes.push(rawCloses[i]);
+          }
+        }
+
         return {
           symbol: h.symbol,
           shares: h.shares,
-          timestamps: result.timestamp || [],
-          closes: result.indicators?.quote?.[0]?.close || [],
+          timestamps,
+          closes,
           previousClose: result.meta?.previousClose || result.meta?.chartPreviousClose || 0
         };
       })
     );
 
     const stocks = results
-      .filter(r => r.status === 'fulfilled' && r.value)
+      .filter(r => r.status === 'fulfilled' && r.value && r.value.timestamps.length > 0)
       .map(r => r.value);
 
     if (stocks.length === 0) return null;
 
     // Convert price to ILS
-    function toILS(price, symbol) {
+    function priceToILS(price, symbol) {
       if (!price || price <= 0) return 0;
       const isTA = symbol.endsWith('.TA');
-      const priceNorm = isTA ? price / 100 : price; // agorot → shekel
-      return isTA ? priceNorm : priceNorm * usdIls; // USD → ILS
+      const norm = isTA ? price / 100 : price;
+      return isTA ? norm : norm * usdIls;
     }
 
-    // Merge all timestamps into sorted unique timeline
-    const allTimes = new Set();
-    for (const s of stocks) {
-      for (const t of s.timestamps) allTimes.add(t);
-    }
-    const timeline = [...allTimes].sort((a, b) => a - b);
-
-    // Calculate previous close total in ILS
+    // Previous close total in ILS
     let prevTotal = 0;
     for (const s of stocks) {
-      prevTotal += s.shares * toILS(s.previousClose, s.symbol);
+      prevTotal += s.shares * priceToILS(s.previousClose, s.symbol);
     }
 
-    // Build portfolio value at each time point
+    // Build portfolio using the stock with most clean data points as timeline
+    // For each other stock, use last known price when their market is closed
+    const primary = stocks.reduce((a, b) => a.timestamps.length > b.timestamps.length ? a : b);
     const points = [];
-    const lastPrice = {}; // track last known price per symbol
+    const lastKnown = {};
 
-    for (const t of timeline) {
+    // Initialize lastKnown with previousClose for each stock
+    for (const s of stocks) {
+      lastKnown[s.symbol] = s.previousClose;
+    }
+
+    for (let i = 0; i < primary.timestamps.length; i++) {
+      const t = primary.timestamps[i];
+
+      // Update lastKnown for each stock that has data at or before this time
+      for (const s of stocks) {
+        for (let j = 0; j < s.timestamps.length; j++) {
+          if (s.timestamps[j] <= t) {
+            lastKnown[s.symbol] = s.closes[j];
+          } else break;
+        }
+      }
+
+      // Calculate total portfolio value
       let total = 0;
       for (const s of stocks) {
-        // Find closest price at or before this timestamp
-        for (let j = 0; j < s.timestamps.length; j++) {
-          if (s.timestamps[j] <= t && s.closes[j] != null && s.closes[j] > 0) {
-            lastPrice[s.symbol] = s.closes[j];
-          }
-        }
-        if (lastPrice[s.symbol]) {
-          total += s.shares * toILS(lastPrice[s.symbol], s.symbol);
-        }
+        total += s.shares * priceToILS(lastKnown[s.symbol], s.symbol);
       }
       if (total > 0) points.push({ t, p: total });
     }
