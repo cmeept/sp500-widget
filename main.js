@@ -404,9 +404,21 @@ ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
       })
     );
 
-    const stocks = results
+    let stocks = results
       .filter(r => r.status === 'fulfilled' && r.value && r.value.timestamps.length > 0)
       .map(r => r.value);
+
+    // For MY1D: exclude stocks whose data is NOT from today
+    // (e.g. NYSE returns yesterday's data before market opens)
+    if (mode === 'MY1D') {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayTs = todayStart.getTime() / 1000;
+      stocks = stocks.filter(s => {
+        const lastTs = s.timestamps[s.timestamps.length - 1];
+        return lastTs >= todayTs;
+      });
+    }
 
     if (stocks.length === 0) return null;
 
@@ -418,28 +430,62 @@ ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
       return isTA ? norm : norm * usdIls;
     }
 
-    // Previous close total in ILS
-    let prevTotal = 0;
+    // For MY1D: only use stocks trading TODAY, others contribute via previousClose
+    // For MY1W: use all stocks
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayTs = todayStart.getTime() / 1000;
+
+    const tradingToday = [];
+    const notTradingToday = [];
     for (const s of stocks) {
+      const lastTs = s.timestamps[s.timestamps.length - 1];
+      if (mode === 'MY1D' && lastTs < todayTs) {
+        notTradingToday.push(s);
+      } else {
+        tradingToday.push(s);
+      }
+    }
+
+    if (tradingToday.length === 0) return null;
+
+    // Yesterday's portfolio value = reference line
+    // For stocks trading today: use their previousClose
+    // For stocks NOT trading today: use regularMarketPrice (last known close)
+    let prevTotal = 0;
+    for (const s of tradingToday) {
       prevTotal += s.shares * priceToILS(s.previousClose, s.symbol);
     }
-
-    // Build portfolio using the stock with most clean data points as timeline
-    // For each other stock, use last known price when their market is closed
-    const primary = stocks.reduce((a, b) => a.timestamps.length > b.timestamps.length ? a : b);
-    const points = [];
-    const lastKnown = {};
-
-    // Initialize lastKnown with previousClose for each stock
-    for (const s of stocks) {
-      lastKnown[s.symbol] = s.previousClose;
+    for (const s of notTradingToday) {
+      // Use last close price as flat contribution
+      const lastClose = s.closes[s.closes.length - 1] || s.previousClose;
+      prevTotal += s.shares * priceToILS(lastClose, s.symbol);
     }
 
-    for (let i = 0; i < primary.timestamps.length; i++) {
-      const t = primary.timestamps[i];
+    // Build timeline from stocks trading today only
+    const allTimes = new Set();
+    for (const s of tradingToday) {
+      for (const t of s.timestamps) allTimes.add(t);
+    }
+    const timeline = [...allTimes].sort((a, b) => a - b);
 
-      // Update lastKnown for each stock that has data at or before this time
-      for (const s of stocks) {
+    if (timeline.length === 0) return null;
+
+    // Flat contribution from non-trading stocks (constant throughout the day)
+    let flatContrib = 0;
+    for (const s of notTradingToday) {
+      const lastClose = s.closes[s.closes.length - 1] || s.previousClose;
+      flatContrib += s.shares * priceToILS(lastClose, s.symbol);
+    }
+
+    const points = [];
+    const lastKnown = {};
+    for (const s of tradingToday) {
+      lastKnown[s.symbol] = s.previousClose || s.closes[0];
+    }
+
+    for (const t of timeline) {
+      for (const s of tradingToday) {
         for (let j = 0; j < s.timestamps.length; j++) {
           if (s.timestamps[j] <= t) {
             lastKnown[s.symbol] = s.closes[j];
@@ -447,9 +493,8 @@ ipcMain.handle('get-portfolio-sparkline', async (_event, holdings, mode) => {
         }
       }
 
-      // Calculate total portfolio value
-      let total = 0;
-      for (const s of stocks) {
+      let total = flatContrib;
+      for (const s of tradingToday) {
         total += s.shares * priceToILS(lastKnown[s.symbol], s.symbol);
       }
       if (total > 0) points.push({ t, p: total });
